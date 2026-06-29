@@ -12,6 +12,7 @@ from pathlib import Path
 from solve.experiments.spec import load_experiment_spec
 from solve.lean.atoms import enumerate_atoms
 from solve.lean.replay import find_tool, replay_file, write_smoke_module
+from solve.lean.triviality import classify_triviality
 from solve.loop import run_control
 
 
@@ -189,6 +190,35 @@ def command_run_control(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_classify_triviality(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    receipts = _resolve_output_path(args.receipts, repo)
+    out_classified = _resolve_output_path(args.out, repo)
+    out_metrics = _resolve_output_path(args.metrics, repo) if args.metrics else None
+    try:
+        metrics = classify_triviality(
+            args.spec,
+            repo=repo,
+            receipts_path=receipts,
+            out_path=out_classified,
+            metrics_path=out_metrics,
+            heartbeat_budget=args.heartbeat_budget,
+            step_budget=args.step_budget,
+            timeout_seconds=args.timeout,
+            max_receipts=args.max_receipts,
+        )
+    except Exception as exc:
+        print(f"CLASSIFY_TRIVIALITY_FAIL {args.spec}", file=sys.stderr)
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(
+        f"CLASSIFY_TRIVIALITY_OK {args.spec} classified={metrics.retained_receipts_classified} "
+        f"trivial_by_automation={metrics.counts_by_automation_classification.get('trivial_by_automation', 0)} "
+        f"out={out_classified}"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="solve")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -227,6 +257,21 @@ def build_parser() -> argparse.ArgumentParser:
     run_control_parser.add_argument("--repo", default=".")
     run_control_parser.add_argument("--timeout", type=int, default=600)
     run_control_parser.set_defaults(func=command_run_control)
+
+    classify_parser = sub.add_parser(
+        "classify-triviality",
+        help="classify retained receipts with bounded Lean automation",
+    )
+    classify_parser.add_argument("spec")
+    classify_parser.add_argument("--receipts", required=True)
+    classify_parser.add_argument("--out", required=True)
+    classify_parser.add_argument("--metrics", required=True)
+    classify_parser.add_argument("--heartbeat-budget", type=int, default=20_000)
+    classify_parser.add_argument("--step-budget", type=int, default=1_000)
+    classify_parser.add_argument("--timeout", type=int, default=30)
+    classify_parser.add_argument("--max-receipts", type=int, default=None)
+    classify_parser.add_argument("--repo", default=".")
+    classify_parser.set_defaults(func=command_classify_triviality)
 
     return parser
 

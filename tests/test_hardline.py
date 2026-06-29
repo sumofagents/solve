@@ -7,6 +7,7 @@ CORE_MODULES = [
     ROOT / "src" / "solve" / "loop.py",
     ROOT / "src" / "solve" / "lean" / "atoms.py",
     ROOT / "src" / "solve" / "lean" / "codegen.py",
+    ROOT / "src" / "solve" / "lean" / "triviality.py",
     ROOT / "src" / "solve" / "verify" / "candidates.py",
     ROOT / "src" / "solve" / "grammar" / "and_intro.py",
 ]

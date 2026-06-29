@@ -18,5 +18,9 @@ solve run-control experiments/run0_nat_control.yaml \
   --out runs/run0/receipts.jsonl \
   --metrics runs/run0/metrics.json \
   --max-candidates 10
+solve classify-triviality experiments/run0_nat_control.yaml \
+  --receipts runs/run0/receipts.jsonl \
+  --out runs/run0/classified.jsonl \
+  --metrics runs/run0/classification_metrics.json
 python -m pytest
 python -m pytest -m lean

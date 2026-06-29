@@ -8,6 +8,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+AutomationClassification = Literal[
+    "trivial_by_automation",
+    "not_trivial_under_bound",
+    "automation_error",
+]
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -40,6 +46,11 @@ class CandidateReceipt(StrictModel):
     replay: ReplayResult
     novelty_classification: Literal["unknown", "existing_defeq_duplicate", "novel_in_imported_env"] = "unknown"
     interestingness_classification: Literal["unknown", "trivial", "nontrivial", "downstream_used"] = "unknown"
+    automation_attempted: list[str] = Field(default_factory=list)
+    automation_closed_by: str | None = None
+    automation_heartbeat_budget: int | None = Field(default=None, ge=0)
+    automation_step_budget: int | None = Field(default=None, ge=0)
+    automation_classification: AutomationClassification | None = None
 
     @property
     def replay_accepted(self) -> bool:
