@@ -15,6 +15,7 @@ from solve.lean.replay import find_tool, replay_file, write_smoke_module
 from solve.lean.triviality import classify_triviality
 from solve.lean.value import classify_value
 from solve.loop import run_control
+from solve.promote import promote
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int = 60) -> subprocess.CompletedProcess[str]:
@@ -171,6 +172,7 @@ def command_run_control(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     out_receipts = _resolve_output_path(args.out, repo)
     out_metrics = _resolve_output_path(args.metrics, repo) if args.metrics else None
+    extend_with = _resolve_output_path(args.extend_with, repo) if args.extend_with else None
     try:
         metrics = run_control(
             args.spec,
@@ -179,6 +181,8 @@ def command_run_control(args: argparse.Namespace) -> int:
             out_metrics=out_metrics,
             max_candidates=args.max_candidates,
             timeout=args.timeout,
+            epoch=args.epoch,
+            extend_with=extend_with,
         )
     except Exception as exc:
         print(f"RUN_CONTROL_FAIL {args.spec}", file=sys.stderr)
@@ -187,6 +191,32 @@ def command_run_control(args: argparse.Namespace) -> int:
     print(
         f"RUN_CONTROL_OK {args.spec} candidates={metrics.candidate_count} "
         f"retained={metrics.retained_count} out={out_receipts}"
+    )
+    return 0
+
+
+def command_promote(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    classified = _resolve_output_path(args.classified, repo)
+    out_promoted = _resolve_output_path(args.out, repo)
+    metrics_path = _resolve_output_path(args.metrics, repo) if args.metrics else None
+    try:
+        metrics = promote(
+            args.spec,
+            repo=repo,
+            classified_path=classified,
+            out_promoted=out_promoted,
+            metrics_path=metrics_path,
+            timeout=args.timeout,
+        )
+    except Exception as exc:
+        print(f"PROMOTE_FAIL {args.spec}", file=sys.stderr)
+        print(str(exc), file=sys.stderr)
+        return 1
+    module = metrics.promoted_module if metrics.promoted_module is not None else "none"
+    print(
+        f"PROMOTE_OK {args.spec} promoted={metrics.promoted_count} "
+        f"module={module} out={out_promoted}"
     )
     return 0
 
@@ -225,6 +255,14 @@ def command_classify_value(args: argparse.Namespace) -> int:
     receipts = _resolve_output_path(args.receipts, repo)
     out_classified = _resolve_output_path(args.out, repo)
     out_metrics = _resolve_output_path(args.metrics, repo)
+    promoted_prefixes: list[str] | None = None
+    if getattr(args, "promoted", None):
+        promoted_path = _resolve_output_path(args.promoted, repo)
+        from solve.verify.promoted import read_promoted_jsonl
+
+        records = read_promoted_jsonl(promoted_path)
+        if records:
+            promoted_prefixes = sorted({r.promoted_module for r in records})
     try:
         metrics = classify_value(
             args.spec,
@@ -239,6 +277,7 @@ def command_classify_value(args: argparse.Namespace) -> int:
             novelty_heartbeat_budget=args.novelty_heartbeat_budget,
             novelty_timeout_seconds=args.novelty_timeout,
             max_receipts=args.max_receipts,
+            promoted_prefixes=promoted_prefixes,
         )
     except Exception as exc:
         print(f"CLASSIFY_VALUE_FAIL {args.spec}", file=sys.stderr)
@@ -292,7 +331,18 @@ def build_parser() -> argparse.ArgumentParser:
     run_control_parser.add_argument("--max-candidates", type=int, default=10)
     run_control_parser.add_argument("--repo", default=".")
     run_control_parser.add_argument("--timeout", type=int, default=600)
+    run_control_parser.add_argument("--epoch", type=int, choices=[0, 1], default=0)
+    run_control_parser.add_argument("--extend-with", default=None)
     run_control_parser.set_defaults(func=command_run_control)
+
+    promote_parser = sub.add_parser("promote", help="promote value-classified receipts into replayed atoms")
+    promote_parser.add_argument("spec")
+    promote_parser.add_argument("--classified", required=True)
+    promote_parser.add_argument("--out", required=True)
+    promote_parser.add_argument("--metrics", default=None)
+    promote_parser.add_argument("--repo", default=".")
+    promote_parser.add_argument("--timeout", type=int, default=600)
+    promote_parser.set_defaults(func=command_promote)
 
     classify_parser = sub.add_parser(
         "classify-triviality",
@@ -324,6 +374,7 @@ def build_parser() -> argparse.ArgumentParser:
     value_parser.add_argument("--novelty-heartbeat-budget", type=int, default=20_000)
     value_parser.add_argument("--novelty-timeout", type=int, default=60)
     value_parser.add_argument("--max-receipts", type=int, default=None)
+    value_parser.add_argument("--promoted", default=None, help="promoted.jsonl path for epoch >= 1 novelty refinement")
     value_parser.add_argument("--repo", default=".")
     value_parser.set_defaults(func=command_classify_value)
 

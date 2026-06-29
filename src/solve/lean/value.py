@@ -105,8 +105,21 @@ def _safe_generated_suffix(name: str) -> str:
     return suffix
 
 
-def _run_control_module_import(spec: ExperimentSpec) -> str:
-    return f"Solve.Generated.RunControl_{_safe_generated_suffix(spec.name)}"
+def _run_control_module_import(spec: ExperimentSpec, *, epoch: int = 0) -> str:
+    suffix = spec.name if epoch == 0 else f"{spec.name}_epoch{epoch}"
+    return f"Solve.Generated.RunControl_{_safe_generated_suffix(suffix)}"
+
+
+def _run_control_imports_for_receipts(
+    spec: ExperimentSpec,
+    receipts: list[tuple[dict[str, object], CandidateReceipt]],
+) -> list[str]:
+    imports: list[str] = []
+    for _raw, receipt in receipts:
+        module = _run_control_module_import(spec, epoch=receipt.epoch)
+        if module not in imports:
+            imports.append(module)
+    return imports or [_run_control_module_import(spec)]
 
 
 def _validate_receipt_integrity(receipts: list[tuple[dict[str, object], CandidateReceipt]], spec: ExperimentSpec) -> None:
@@ -189,6 +202,7 @@ def classify_value(
     novelty_heartbeat_budget: int = 20_000,
     novelty_timeout_seconds: int = 60,
     max_receipts: int | None = None,
+    promoted_prefixes: list[str] | None = None,
 ) -> ValueClassificationMetrics:
     if max_receipts is not None and max_receipts < 0:
         raise ValueError("max_receipts must be non-negative")
@@ -206,11 +220,24 @@ def classify_value(
     )
     receipt_records = _read_receipt_objects(receipts_path)
     _validate_receipt_integrity(receipt_records, spec)
-    build_modules(repo, [_run_control_module_import(spec), "Solve.Tools.NoveltyProbe", "Solve.Tools.TermProbe"])
 
     classified_records: list[dict[str, object]] = []
     skipped_not_retained_count = 0
     cap_skipped_count = 0
+    records_to_classify: list[tuple[dict[str, object], CandidateReceipt]] = []
+    for raw, receipt in receipt_records:
+        if not _is_classifiable_retained(receipt):
+            skipped_not_retained_count += 1
+            continue
+        if max_receipts is not None and len(records_to_classify) >= max_receipts:
+            cap_skipped_count += 1
+            continue
+        records_to_classify.append((raw, receipt))
+
+    probe_imports = _run_control_imports_for_receipts(spec, records_to_classify)
+    if records_to_classify:
+        build_modules(repo, [*probe_imports, "Solve.Tools.NoveltyProbe", "Solve.Tools.TermProbe"])
+
     counts_by_structural = {"true": 0, "false": 0, "unknown": 0}
     counts_by_ingredient = {"true": 0, "false": 0, "unknown": 0}
     counts_by_ingredient_closed_by: dict[str, int] = {"null": 0}
@@ -227,98 +254,98 @@ def classify_value(
         "unknown": 0,
     }
     counts_by_promotable = {"true": 0, "false": 0}
-    probe_imports = [_run_control_module_import(spec)]
+    if records_to_classify:
+        with tempfile.TemporaryDirectory(prefix="solve_value_") as tmp:
+            transient_dir = Path(tmp)
+            _raise_for_failed_probe(
+                _run_import_probe(
+                    repo=repo,
+                    imports=list(spec.lean.imports),
+                    bounds=bounds,
+                    transient_dir=transient_dir,
+                    runner=_run_lake_env_lean,
+                )
+            )
+            for raw, receipt in records_to_classify:
+                classified = dict(raw)
+                structural_result = probe_structural_packaging_details(
+                    receipt.generated_theorem_name,
+                    repo=repo,
+                    imports=probe_imports,
+                    timeout=timeout_seconds,
+                    heartbeat_budget=heartbeat_budget,
+                    rec_depth=step_budget,
+                )
+                structural_packaging = (
+                    structural_result.structural_packaging if structural_result.verdict != "error" else None
+                )
+                classified.update(
+                    {
+                        "structural_packaging": structural_packaging,
+                        "structural_packaging_reason": structural_result.reason,
+                    }
+                )
+                _count(counts_by_structural, _structural_count_key(structural_result))
 
-    with tempfile.TemporaryDirectory(prefix="solve_value_") as tmp:
-        transient_dir = Path(tmp)
-        _raise_for_failed_probe(
-            _run_import_probe(
-                repo=repo,
-                imports=list(spec.lean.imports),
-                bounds=bounds,
-                transient_dir=transient_dir,
-                runner=_run_lake_env_lean,
-            )
-        )
-        for raw, receipt in receipt_records:
-            if not _is_classifiable_retained(receipt):
-                skipped_not_retained_count += 1
-                continue
-            if max_receipts is not None and len(classified_records) >= max_receipts:
-                cap_skipped_count += 1
-                continue
+                classified = classify_ingredient_triviality(
+                    classified,
+                    receipt=receipt,
+                    spec=spec,
+                    repo=repo,
+                    bounds=bounds,
+                    transient_dir=transient_dir,
+                )
+                ingredient_trivial = classified.get("ingredient_trivial_by_automation")
+                _count(
+                    counts_by_ingredient,
+                    _bool_key(ingredient_trivial if isinstance(ingredient_trivial, bool) else None),
+                )
+                ingredient_closed_by = classified.get("ingredient_trivial_closed_by")
+                _count(counts_by_ingredient_closed_by, str(ingredient_closed_by) if ingredient_closed_by else "null")
 
-            classified = dict(raw)
-            structural_result = probe_structural_packaging_details(
-                receipt.generated_theorem_name,
-                repo=repo,
-                imports=probe_imports,
-                timeout=timeout_seconds,
-                heartbeat_budget=heartbeat_budget,
-                rec_depth=step_budget,
-            )
-            structural_packaging = (
-                structural_result.structural_packaging if structural_result.verdict != "error" else None
-            )
-            classified.update(
-                {
-                    "structural_packaging": structural_packaging,
-                    "structural_packaging_reason": structural_result.reason,
-                }
-            )
-            _count(counts_by_structural, _structural_count_key(structural_result))
+                novelty_result: NoveltyProbeResult = probe_novelty(
+                    receipt.generated_theorem_name,
+                    repo=repo,
+                    imports=probe_imports,
+                    prefixes=list(spec.corpus.namespace_prefixes),
+                    promoted_prefixes=promoted_prefixes,
+                    candidate_cap=novelty_candidate_cap,
+                    timeout=novelty_timeout_seconds,
+                    heartbeat_budget=novelty_heartbeat_budget,
+                    rec_depth=step_budget,
+                )
+                classified["novelty_classification"] = novelty_result.classification
+                classified["novelty_witness"] = novelty_result.witness
+                classified["novelty_compared"] = novelty_result.compared
+                classified["novelty_cap_hit"] = novelty_result.cap_hit
+                classified["novelty_reason"] = novelty_result.reason
+                _count(counts_by_novelty, novelty_result.classification)
 
-            classified = classify_ingredient_triviality(
-                classified,
-                receipt=receipt,
-                spec=spec,
-                repo=repo,
-                bounds=bounds,
-                transient_dir=transient_dir,
-            )
-            ingredient_trivial = classified.get("ingredient_trivial_by_automation")
-            _count(counts_by_ingredient, _bool_key(ingredient_trivial if isinstance(ingredient_trivial, bool) else None))
-            ingredient_closed_by = classified.get("ingredient_trivial_closed_by")
-            _count(counts_by_ingredient_closed_by, str(ingredient_closed_by) if ingredient_closed_by else "null")
+                classified = classify_from_scratch_closure(
+                    classified,
+                    receipt=receipt,
+                    spec=spec,
+                    repo=repo,
+                    bounds=bounds,
+                    transient_dir=transient_dir,
+                )
+                from_scratch = str(classified.get("from_scratch_closure") or "unknown")
+                _count(counts_by_from_scratch, from_scratch)
 
-            novelty_result: NoveltyProbeResult = probe_novelty(
-                receipt.generated_theorem_name,
-                repo=repo,
-                imports=probe_imports,
-                prefixes=list(spec.corpus.namespace_prefixes),
-                candidate_cap=novelty_candidate_cap,
-                timeout=novelty_timeout_seconds,
-                heartbeat_budget=novelty_heartbeat_budget,
-                rec_depth=step_budget,
-            )
-            classified["novelty_classification"] = novelty_result.classification
-            _count(counts_by_novelty, novelty_result.classification)
-
-            classified = classify_from_scratch_closure(
-                classified,
-                receipt=receipt,
-                spec=spec,
-                repo=repo,
-                bounds=bounds,
-                transient_dir=transient_dir,
-            )
-            from_scratch = str(classified.get("from_scratch_closure") or "unknown")
-            _count(counts_by_from_scratch, from_scratch)
-
-            gate = compose_value_gate(
-                truth=receipt.replay_accepted,
-                novelty_classification=novelty_result.classification,
-                structural_packaging=structural_packaging,
-                ingredient_trivial_by_automation=(
-                    ingredient_trivial if isinstance(ingredient_trivial, bool) else None
-                ),
-                downstream_used=receipt.downstream_used,
-            )
-            classified["promotable"] = gate.promotable
-            classified["downstream_used"] = receipt.downstream_used
-            classified["interestingness_classification"] = gate.interestingness_classification
-            _count(counts_by_promotable, "true" if gate.promotable else "false")
-            classified_records.append(classified)
+                gate = compose_value_gate(
+                    truth=receipt.replay_accepted,
+                    novelty_classification=novelty_result.classification,
+                    structural_packaging=structural_packaging,
+                    ingredient_trivial_by_automation=(
+                        ingredient_trivial if isinstance(ingredient_trivial, bool) else None
+                    ),
+                    downstream_used=receipt.downstream_used,
+                )
+                classified["promotable"] = gate.promotable
+                classified["downstream_used"] = receipt.downstream_used
+                classified["interestingness_classification"] = gate.interestingness_classification
+                _count(counts_by_promotable, "true" if gate.promotable else "false")
+                classified_records.append(classified)
 
     _write_jsonl(out_path, classified_records)
     finished_at_iso = _utc_now_iso()

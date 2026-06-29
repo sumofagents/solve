@@ -92,6 +92,14 @@ def _probe_error(detail: str) -> NoveltyProbeResult:
     )
 
 
+def _merge_prefixes(prefixes: list[str], promoted_prefixes: list[str] | None) -> list[str]:
+    merged: list[str] = []
+    for prefix in [*prefixes, *(promoted_prefixes or [])]:
+        if prefix and prefix not in merged:
+            merged.append(prefix)
+    return merged
+
+
 def _wrapper_text(
     *,
     imports: list[str],
@@ -118,6 +126,7 @@ def probe_novelty(
     repo: Path,
     imports: list[str],
     prefixes: list[str],
+    promoted_prefixes: list[str] | None = None,
     candidate_cap: int,
     timeout: int,
     heartbeat_budget: int = 20_000,
@@ -134,6 +143,7 @@ def probe_novelty(
         raise ValueError("rec_depth must be positive")
 
     repo = repo.resolve()
+    all_prefixes = _merge_prefixes(prefixes, promoted_prefixes)
     build_modules(repo, imports, timeout=timeout)
     generated_dir = repo / "lean" / "Solve" / "Generated"
     generated_dir.mkdir(parents=True, exist_ok=True)
@@ -152,7 +162,7 @@ def probe_novelty(
         "env",
         "lean",
         f"-Dweak.solve.novelty.target={target_name}",
-        f"-Dweak.solve.novelty.prefixes={','.join(prefixes)}",
+        f"-Dweak.solve.novelty.prefixes={','.join(all_prefixes)}",
         f"-Dweak.solve.novelty.candidateCap={candidate_cap}",
         f"-Dweak.solve.novelty.heartbeatBudget={heartbeat_budget}",
         str(module_path),

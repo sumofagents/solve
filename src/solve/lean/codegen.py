@@ -33,6 +33,7 @@ def write_run_control_module(
     repo: Path,
     spec: ExperimentSpec,
     module_suffix: str,
+    extra_imports: list[str] | None = None,
 ) -> Path:
     safe_suffix = _safe_generated_suffix(module_suffix)
     path = repo / "lean" / "Solve" / "Generated" / f"RunControl_{safe_suffix}.lean"
@@ -40,6 +41,8 @@ def write_run_control_module(
 
     lines: list[str] = []
     lines.extend(f"import {imp}" for imp in spec.lean.imports)
+    if extra_imports:
+        lines.extend(f"import {imp}" for imp in extra_imports)
     lines.append("")
     lines.append("-- Lean requires theorem declarations to carry an explicit type; defs with @parents preserve inferred And.intro types.")
     lines.append(f"namespace {RUN_CONTROL_NAMESPACE}")

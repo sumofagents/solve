@@ -60,6 +60,7 @@ class CandidateReceipt(StrictModel):
     automation_heartbeat_budget: int | None = Field(default=None, ge=0)
     automation_step_budget: int | None = Field(default=None, ge=0)
     automation_classification: AutomationClassification | None = None
+    epoch: int = Field(default=0, ge=0)
 
     @property
     def replay_accepted(self) -> bool:

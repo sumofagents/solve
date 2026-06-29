@@ -16,10 +16,11 @@ from pathlib import Path
 
 from solve.experiments.spec import ExperimentSpec, load_experiment_spec
 from solve.grammar.and_intro import generate_and_intro_candidates
-from solve.lean.atoms import enumerate_atoms
+from solve.lean.atoms import AtomRecord, enumerate_atoms
 from solve.lean.codegen import write_run_control_module
 from solve.lean.replay import replay_file
 from solve.verify.candidates import GeneratedCandidate, RunControlMetrics, write_metrics
+from solve.verify.promoted import PromotedAtomRecord, read_promoted_jsonl
 from solve.verify.receipts import CandidateReceipt, ReplayResult, write_jsonl
 
 
@@ -126,6 +127,7 @@ def _receipt_for(
     replay: ReplayResult,
     axioms_used: list[str],
     statement: str,
+    epoch: int = 0,
 ) -> CandidateReceipt:
     parent_a, parent_b = candidate.parents
     proof_term = f"And.intro (@{parent_a}) (@{parent_b})"
@@ -145,6 +147,7 @@ def _receipt_for(
         axioms_used=axioms_used,
         replay=replay,
         interestingness_classification="trivial",
+        epoch=epoch,
     )
 
 
@@ -177,6 +180,46 @@ def _resolve_spec_path(spec_path: str, repo: Path) -> Path:
     return repo / path
 
 
+def _promoted_atom_as_atom(record: PromotedAtomRecord) -> AtomRecord:
+    return AtomRecord(
+        name=record.fully_qualified_name,
+        kind="theorem",
+        type_pp=record.statement,
+        type_hash="sha256:" + hashlib.sha256(record.statement.encode("utf-8")).hexdigest(),
+        binder_count=None,
+        arity=None,
+        module=record.promoted_module,
+        axioms=None,
+    )
+
+
+def _validate_promoted_integrity(records: list[PromotedAtomRecord], spec: ExperimentSpec) -> None:
+    for index, record in enumerate(records, start=1):
+        if record.experiment_id != spec.name:
+            raise ValueError(
+                f"promoted row {index} experiment_id {record.experiment_id!r} != spec name {spec.name!r}"
+            )
+        if record.toolchain != spec.lean.toolchain:
+            raise ValueError(
+                f"promoted row {index} toolchain {record.toolchain!r} != spec toolchain {spec.lean.toolchain!r}"
+            )
+        if list(record.imports) != list(spec.lean.imports):
+            raise ValueError(
+                f"promoted row {index} imports {record.imports!r} != spec imports {spec.lean.imports!r}"
+            )
+
+
+def _epoch1_generated_names(candidates: list[GeneratedCandidate]) -> list[GeneratedCandidate]:
+    return [
+        candidate.model_copy(
+            update={
+                "generated_theorem_name": f"Solve.Generated.RunControl.solve_generated_epoch1_{index}",
+            }
+        )
+        for index, candidate in enumerate(candidates)
+    ]
+
+
 def run_control(
     spec_path: str,
     *,
@@ -185,9 +228,15 @@ def run_control(
     out_metrics: Path | None,
     max_candidates: int,
     timeout: int = 600,
+    epoch: int = 0,
+    extend_with: Path | None = None,
 ) -> RunControlMetrics:
     if max_candidates < 0:
         raise ValueError("max_candidates must be non-negative")
+    if epoch not in {0, 1}:
+        raise ValueError("epoch must be 0 or 1")
+    if epoch == 1 and extend_with is None:
+        raise ValueError("extend_with is required when epoch=1")
 
     repo = repo.resolve()
     started_at_iso = _utc_now_iso()
@@ -195,6 +244,13 @@ def run_control(
     spec = load_experiment_spec(_resolve_spec_path(spec_path, repo))
 
     atoms = enumerate_atoms(spec, repo=repo, timeout=timeout)
+    extra_imports: list[str] = []
+    if epoch == 1 and extend_with is not None:
+        promoted_path = extend_with if extend_with.is_absolute() else repo / extend_with
+        promoted_records = read_promoted_jsonl(promoted_path)
+        _validate_promoted_integrity(promoted_records, spec)
+        atoms = [*atoms, *[_promoted_atom_as_atom(record) for record in promoted_records]]
+        extra_imports = list(dict.fromkeys(record.promoted_module for record in promoted_records))
     if not any(atom.kind == "theorem" for atom in atoms):
         raise RuntimeError("run-control atom enumeration returned zero theorem records")
 
@@ -204,12 +260,16 @@ def run_control(
         max_candidates=candidate_cap,
         experiment_name=spec.name,
     )
+    if epoch == 1:
+        candidates = _epoch1_generated_names(candidates)
 
+    module_suffix = spec.name if epoch == 0 else f"{spec.name}_epoch1"
     module_path = write_run_control_module(
         candidates,
         repo=repo,
         spec=spec,
-        module_suffix=spec.name,
+        module_suffix=module_suffix,
+        extra_imports=extra_imports,
     )
     aggregate_replay = _replay_result_from_completed(replay_file(module_path, cwd=repo, timeout=timeout))
     if aggregate_replay.accepted:
@@ -221,7 +281,8 @@ def run_control(
                 [candidate],
                 repo=repo,
                 spec=spec,
-                module_suffix=f"{spec.name}_{index}",
+                module_suffix=f"{module_suffix}_{index}",
+                extra_imports=extra_imports,
             )
             replay = _replay_result_from_completed(replay_file(per_candidate_module, cwd=repo, timeout=timeout))
             outcomes.extend(_outcomes_from_single_replay([candidate], replay))
@@ -233,6 +294,7 @@ def run_control(
             replay=outcome.replay,
             axioms_used=outcome.axioms_used,
             statement=outcome.statement,
+            epoch=epoch,
         )
         for outcome in outcomes
     ]
