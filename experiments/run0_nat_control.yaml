@@ -1,0 +1,36 @@
+version: 1
+name: run0-nat-control
+lean:
+  toolchain: leanprover/lean4:v4.31.0
+  imports:
+    - Mathlib.Data.Nat.Basic
+corpus:
+  namespace_prefixes:
+    - Nat
+  seed_limit: 120
+  max_binders: 5
+  max_statement_chars: 500
+grammar:
+  operators:
+    - Eq.symm
+    - Eq.trans
+    - congrArg
+  baseline_operators:
+    - And.intro
+bounds:
+  max_depth: 2
+  promotion_depth: 3
+  max_candidates_total: 10000
+  max_candidates_per_operator: 2500
+  verify_timeout_ms: 1000
+dedup:
+  existing: defeq_imported_environment
+  retained: defeq
+promotion:
+  require_replay: true
+  require_not_existing_defeq: true
+  require_downstream_use_within_depth: 3
+consumer:
+  name: triviality_filter_control
+connectors:
+  enabled: false
