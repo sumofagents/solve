@@ -133,6 +133,12 @@ class PromotionSpec(StrictModel):
     require_downstream_use_within_depth: int | None = Field(default=None, ge=1, le=10)
 
 
+class NoveltyConfig(StrictModel):
+    scope: Literal["imported", "global"] = "imported"
+    verify_mode: Literal["discrtree", "brute"] = "discrtree"
+    candidate_cap: int = Field(default=5_000, ge=0)
+
+
 class ConsumerSpec(StrictModel):
     name: str
 
@@ -166,6 +172,7 @@ class ExperimentSpec(StrictModel):
     bounds: BoundsSpec
     dedup: DedupSpec
     promotion: PromotionSpec
+    novelty: NoveltyConfig = Field(default_factory=NoveltyConfig)
     consumer: ConsumerSpec
     connectors: ConnectorsSpec = Field(default_factory=ConnectorsSpec)
 

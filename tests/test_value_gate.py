@@ -117,7 +117,7 @@ def test_value_classifier_skips_probes_for_not_retained_receipts(monkeypatch, tm
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("structural probe called")),
     )
     monkeypatch.setattr(
-        "solve.lean.value.probe_novelty",
+        "solve.lean.value.probe_novelty_batch",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("novelty probe called")),
     )
 

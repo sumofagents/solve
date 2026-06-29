@@ -13,7 +13,7 @@ from pathlib import Path
 from pydantic import Field
 
 from solve.experiments.spec import ExperimentSpec, load_experiment_spec
-from solve.lean.novelty import NoveltyProbeResult, probe_novelty
+from solve.lean.novelty import NoveltyProbeResult, NoveltyScope, NoveltyVerifyMode, probe_novelty_batch
 from solve.lean.replay import build_modules, find_tool
 from solve.lean.term_inspect import StructuralProbeResult, probe_structural_packaging_details
 from solve.lean.triviality import (
@@ -64,6 +64,7 @@ class ValueClassificationMetrics(StrictFrozenModel):
     novelty_heartbeat_budget: int = Field(..., gt=0)
     novelty_step_budget: int = Field(..., gt=0)
     novelty_timeout_seconds: int = Field(..., gt=0)
+    novelty_scope: str = "imported"
     from_scratch_heartbeat_budget: int = Field(..., gt=0)
     from_scratch_step_budget: int = Field(..., gt=0)
     from_scratch_timeout_seconds: int = Field(..., gt=0)
@@ -184,6 +185,16 @@ def _structural_count_key(result: StructuralProbeResult) -> str:
     return "true" if result.structural_packaging else "false"
 
 
+def _missing_novelty_result(target: str) -> NoveltyProbeResult:
+    return NoveltyProbeResult(
+        classification="unknown",
+        witness=None,
+        compared=0,
+        cap_hit=False,
+        reason=f"probe_error: missing NOV result for target {target}",
+    )
+
+
 def _count(mapping: dict[str, int], key: str) -> None:
     mapping[key] = mapping.get(key, 0) + 1
 
@@ -201,6 +212,9 @@ def classify_value(
     novelty_candidate_cap: int = 5_000,
     novelty_heartbeat_budget: int = 20_000,
     novelty_timeout_seconds: int = 60,
+    novelty_global_timeout_seconds: int = 300,
+    novelty_scope: NoveltyScope = "imported",
+    novelty_verify_mode: NoveltyVerifyMode = "discrtree",
     max_receipts: int | None = None,
     promoted_prefixes: list[str] | None = None,
 ) -> ValueClassificationMetrics:
@@ -208,6 +222,12 @@ def classify_value(
         raise ValueError("max_receipts must be non-negative")
     if novelty_candidate_cap < 0:
         raise ValueError("novelty_candidate_cap must be non-negative")
+    if novelty_global_timeout_seconds <= 0:
+        raise ValueError("novelty_global_timeout_seconds must be positive")
+    if novelty_scope not in {"imported", "global"}:
+        raise ValueError("novelty_scope must be 'imported' or 'global'")
+    if novelty_verify_mode not in {"discrtree", "brute"}:
+        raise ValueError("novelty_verify_mode must be 'discrtree' or 'brute'")
 
     repo = repo.resolve()
     started_at_iso = _utc_now_iso()
@@ -255,6 +275,21 @@ def classify_value(
     }
     counts_by_promotable = {"true": 0, "false": 0}
     if records_to_classify:
+        novelty_timeout = novelty_global_timeout_seconds if novelty_scope == "global" else novelty_timeout_seconds
+        target_names = [receipt.generated_theorem_name for _raw, receipt in records_to_classify]
+        novelty_results = probe_novelty_batch(
+            target_names,
+            repo=repo,
+            imports=probe_imports,
+            prefixes=list(spec.corpus.namespace_prefixes),
+            scope=novelty_scope,
+            verify_mode=novelty_verify_mode,
+            promoted_prefixes=promoted_prefixes,
+            candidate_cap=novelty_candidate_cap,
+            timeout=novelty_timeout,
+            heartbeat_budget=novelty_heartbeat_budget,
+            rec_depth=step_budget,
+        )
         with tempfile.TemporaryDirectory(prefix="solve_value_") as tmp:
             transient_dir = Path(tmp)
             _raise_for_failed_probe(
@@ -303,16 +338,9 @@ def classify_value(
                 ingredient_closed_by = classified.get("ingredient_trivial_closed_by")
                 _count(counts_by_ingredient_closed_by, str(ingredient_closed_by) if ingredient_closed_by else "null")
 
-                novelty_result: NoveltyProbeResult = probe_novelty(
+                novelty_result: NoveltyProbeResult = novelty_results.get(
                     receipt.generated_theorem_name,
-                    repo=repo,
-                    imports=probe_imports,
-                    prefixes=list(spec.corpus.namespace_prefixes),
-                    promoted_prefixes=promoted_prefixes,
-                    candidate_cap=novelty_candidate_cap,
-                    timeout=novelty_timeout_seconds,
-                    heartbeat_budget=novelty_heartbeat_budget,
-                    rec_depth=step_budget,
+                    _missing_novelty_result(receipt.generated_theorem_name),
                 )
                 classified["novelty_classification"] = novelty_result.classification
                 classified["novelty_witness"] = novelty_result.witness
@@ -372,7 +400,8 @@ def classify_value(
         novelty_candidate_cap=novelty_candidate_cap,
         novelty_heartbeat_budget=novelty_heartbeat_budget,
         novelty_step_budget=step_budget,
-        novelty_timeout_seconds=novelty_timeout_seconds,
+        novelty_timeout_seconds=novelty_global_timeout_seconds if novelty_scope == "global" else novelty_timeout_seconds,
+        novelty_scope=novelty_scope,
         from_scratch_heartbeat_budget=heartbeat_budget,
         from_scratch_step_budget=step_budget,
         from_scratch_timeout_seconds=timeout_seconds,

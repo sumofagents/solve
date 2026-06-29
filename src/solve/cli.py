@@ -276,6 +276,9 @@ def command_classify_value(args: argparse.Namespace) -> int:
             novelty_candidate_cap=args.novelty_candidate_cap,
             novelty_heartbeat_budget=args.novelty_heartbeat_budget,
             novelty_timeout_seconds=args.novelty_timeout,
+            novelty_global_timeout_seconds=args.novelty_global_timeout,
+            novelty_scope=args.novelty_scope,
+            novelty_verify_mode=args.novelty_verify_mode,
             max_receipts=args.max_receipts,
             promoted_prefixes=promoted_prefixes,
         )
@@ -404,6 +407,9 @@ def build_parser() -> argparse.ArgumentParser:
     value_parser.add_argument("--novelty-candidate-cap", type=int, default=5_000)
     value_parser.add_argument("--novelty-heartbeat-budget", type=int, default=20_000)
     value_parser.add_argument("--novelty-timeout", type=int, default=60)
+    value_parser.add_argument("--novelty-global-timeout", type=int, default=300)
+    value_parser.add_argument("--novelty-scope", choices=["imported", "global"], default="imported")
+    value_parser.add_argument("--novelty-verify-mode", choices=["discrtree", "brute"], default="discrtree")
     value_parser.add_argument("--max-receipts", type=int, default=None)
     value_parser.add_argument("--promoted", default=None, help="promoted.jsonl path for epoch >= 1 novelty refinement")
     value_parser.add_argument("--repo", default=".")
