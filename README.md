@@ -6,4 +6,12 @@ The self-extending grammar experiment: point the architecture proven in [`manifo
 
 ## Status
 
-Experimental. Architecture planning in progress.
+Experimental. Architecture plan drafted in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+The trust boundary is strict:
+
+```text
+Language may propose / rank / explain / configure.
+Language may not verify or retain truth.
+Lean replay receipts are the retention gate.
+```
