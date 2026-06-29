@@ -49,8 +49,11 @@ def write_run_control_module(
     lines.append("")
     for candidate in candidates:
         local_name = _local_decl_name(candidate.generated_theorem_name)
-        parent_a, parent_b = candidate.parents
-        lines.append(f"def {local_name} := And.intro (@{parent_a}) (@{parent_b})")
+        if candidate.operator == "And.intro":
+            parent_a, parent_b = candidate.parents
+            lines.append(f"def {local_name} := And.intro (@{parent_a}) (@{parent_b})")
+        else:
+            lines.append(f"theorem {local_name} : {candidate.statement} := {candidate.proof_term}")
         lines.append(f"#check {RUN_CONTROL_NAMESPACE}.{local_name}")
         lines.append(f"#print axioms {RUN_CONTROL_NAMESPACE}.{local_name}")
         lines.append("")

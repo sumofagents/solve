@@ -9,12 +9,27 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from solve.grammar.operators import OPERATORS
+
 
 class StrictFrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
-def make_candidate_id(operator: str, parents: tuple[str, str], depth: int) -> str:
+CandidateOperator = Literal["And.intro", "Eq.symm", "Eq.trans", "congrArg", "Iff.intro", "Iff.mp", "Iff.mpr"]
+
+# The registry records Lean proof-argument arity. The 5d Iff.mp/Iff.mpr
+# generators synthesize implication theorems from a single iff theorem parent.
+_GENERATOR_ARITY_OVERRIDES = {"Iff.mp": 1, "Iff.mpr": 1}
+
+
+def _generator_arity(operator: str) -> int:
+    if operator in _GENERATOR_ARITY_OVERRIDES:
+        return _GENERATOR_ARITY_OVERRIDES[operator]
+    return OPERATORS[operator].arity
+
+
+def make_candidate_id(operator: str, parents: tuple[str, ...], depth: int) -> str:
     """Return the phase-2 stable candidate id."""
     payload = json.dumps(
         {
@@ -31,11 +46,32 @@ def make_candidate_id(operator: str, parents: tuple[str, str], depth: int) -> st
 
 class GeneratedCandidate(StrictFrozenModel):
     candidate_id: str = Field(..., min_length=1)
-    operator: Literal["And.intro"]
-    parents: tuple[str, str]
+    operator: CandidateOperator
+    parents: tuple[str, ...]
     depth: int = Field(..., ge=1, le=1)
     generated_theorem_name: str = Field(..., min_length=1)
-    parent_atom_kinds: tuple[str, str]
+    parent_atom_kinds: tuple[str, ...]
+    statement: str | None = None
+    proof_term: str | None = None
+
+    @model_validator(mode="after")
+    def operator_contract(self) -> "GeneratedCandidate":
+        expected_arity = _generator_arity(self.operator)
+        if len(self.parents) != expected_arity:
+            raise ValueError(f"{self.operator} candidates require {expected_arity} parents")
+        if len(self.parent_atom_kinds) != expected_arity:
+            raise ValueError(f"{self.operator} candidates require {expected_arity} parent atom kinds")
+
+        if self.operator == "And.intro":
+            if self.statement is not None or self.proof_term is not None:
+                raise ValueError("And.intro candidates must not carry typed statement/proof fields")
+            return self
+
+        if self.statement is None or not self.statement.strip():
+            raise ValueError(f"{self.operator} candidates require a non-empty statement")
+        if self.proof_term is None or not self.proof_term.strip():
+            raise ValueError(f"{self.operator} candidates require a non-empty proof_term")
+        return self
 
 
 class RunControlMetrics(StrictFrozenModel):

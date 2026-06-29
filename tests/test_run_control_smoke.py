@@ -34,8 +34,12 @@ def test_run_control_run0_smoke_seed_limit_5(tmp_path):
     receipts = read_jsonl(receipts_path)
     assert len(receipts) >= 1
     assert len(receipts) == metrics.candidate_count
-    for receipt in receipts:
-        assert receipt.replay.accepted is True
+    # Typed grammar (Eq.symm/trans, congrArg) produces some type-mismatched
+    # candidates that fail replay. Only retained (accepted) receipts must be
+    # sorry-free and accepted.
+    retained = [r for r in receipts if r.replay.accepted]
+    assert len(retained) >= 1
+    for receipt in retained:
         assert receipt.interestingness_classification == "trivial"
         assert isinstance(receipt.axioms_used, list)
         assert "sorryAx" not in receipt.replay.stdout

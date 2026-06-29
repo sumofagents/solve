@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from solve.experiments.spec import ExperimentSpec, load_experiment_spec
-from solve.grammar.and_intro import generate_and_intro_candidates
+from solve.grammar.dispatch import generate_for_operator
 from solve.lean.atoms import AtomRecord, enumerate_atoms
 from solve.lean.codegen import write_run_control_module
 from solve.lean.replay import replay_file
@@ -129,8 +129,11 @@ def _receipt_for(
     statement: str,
     epoch: int = 0,
 ) -> CandidateReceipt:
-    parent_a, parent_b = candidate.parents
-    proof_term = f"And.intro (@{parent_a}) (@{parent_b})"
+    if candidate.operator == "And.intro":
+        parent_a, parent_b = candidate.parents
+        proof_term = f"And.intro (@{parent_a}) (@{parent_b})"
+    else:
+        proof_term = candidate.proof_term or ""
     normalized_hash = "sha256:" + hashlib.sha256(statement.encode("utf-8")).hexdigest()
     return CandidateReceipt(
         record_id=candidate.candidate_id,
@@ -220,6 +223,17 @@ def _epoch1_generated_names(candidates: list[GeneratedCandidate]) -> list[Genera
     ]
 
 
+def _run_control_generated_names(candidates: list[GeneratedCandidate]) -> list[GeneratedCandidate]:
+    return [
+        candidate.model_copy(
+            update={
+                "generated_theorem_name": f"Solve.Generated.RunControl.solve_generated_{index}",
+            }
+        )
+        for index, candidate in enumerate(candidates)
+    ]
+
+
 def run_control(
     spec_path: str,
     *,
@@ -254,12 +268,26 @@ def run_control(
     if not any(atom.kind == "theorem" for atom in atoms):
         raise RuntimeError("run-control atom enumeration returned zero theorem records")
 
-    candidate_cap = min(max_candidates, spec.bounds.max_candidates_total, spec.bounds.max_candidates_per_operator)
-    candidates = generate_and_intro_candidates(
-        atoms,
-        max_candidates=candidate_cap,
-        experiment_name=spec.name,
-    )
+    candidate_cap = min(max_candidates, spec.bounds.max_candidates_total)
+    candidates: list[GeneratedCandidate] = []
+    if candidate_cap > 0:
+        operators = sorted(spec.grammar.all_operators)
+        per_operator_cap = spec.bounds.max_candidates_per_operator
+        # Round-robin interleave so typed operators (Eq.symm/trans, congrArg,
+        # Iff.*) get candidates alongside And.intro, not starved by it.
+        per_op = max(1, candidate_cap // max(1, len(operators)))
+        for operator in operators:
+            generated = generate_for_operator(
+                operator,
+                atoms,
+                max_candidates=min(per_op, per_operator_cap),
+                experiment_name=spec.name,
+            )
+            candidates.extend(generated)
+            if len(candidates) >= candidate_cap:
+                candidates = candidates[:candidate_cap]
+                break
+    candidates = _run_control_generated_names(candidates)
     if epoch == 1:
         candidates = _epoch1_generated_names(candidates)
 
@@ -299,6 +327,20 @@ def run_control(
         for outcome in outcomes
     ]
     write_jsonl(out_receipts, receipts)
+
+    # Rewrite the module with only retained candidates so downstream tools
+    # (classify-value, promote, mark-downstream-used) can build it cleanly.
+    # The aggregate module may contain type-mismatched typed-operator candidates
+    # that fail lake build; the clean module only includes replay-accepted defs.
+    retained_candidates = [outcome.candidate for outcome in outcomes if outcome.retained]
+    if retained_candidates:
+        write_run_control_module(
+            retained_candidates,
+            repo=repo,
+            spec=spec,
+            module_suffix=module_suffix,
+            extra_imports=extra_imports,
+        )
 
     retained_count = sum(1 for outcome in outcomes if outcome.retained)
     finished_at_iso = _utc_now_iso()

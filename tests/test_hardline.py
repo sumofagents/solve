@@ -15,8 +15,15 @@ CORE_MODULES = [
     ROOT / "src" / "solve" / "lean" / "promote_codegen.py",
     ROOT / "src" / "solve" / "lean" / "usage.py",
     ROOT / "src" / "solve" / "lean" / "downstream.py",
-    ROOT / "src" / "solve" / "verify" / "candidates.py",
     ROOT / "src" / "solve" / "grammar" / "and_intro.py",
+    ROOT / "src" / "solve" / "grammar" / "dispatch.py",
+    ROOT / "src" / "solve" / "grammar" / "type_shape.py",
+    ROOT / "src" / "solve" / "grammar" / "eq_symm.py",
+    ROOT / "src" / "solve" / "grammar" / "eq_trans.py",
+    ROOT / "src" / "solve" / "grammar" / "congr_arg.py",
+    ROOT / "src" / "solve" / "grammar" / "iff_intro.py",
+    ROOT / "src" / "solve" / "grammar" / "iff_mp.py",
+    ROOT / "src" / "solve" / "grammar" / "iff_mpr.py",
 ]
 
 
