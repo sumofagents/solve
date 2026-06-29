@@ -144,7 +144,6 @@ def _receipt_for(
         normalized_statement_hash=normalized_hash,
         axioms_used=axioms_used,
         replay=replay,
-        novelty_classification="unknown",
         interestingness_classification="trivial",
     )
 

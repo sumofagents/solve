@@ -22,5 +22,9 @@ solve classify-triviality experiments/run0_nat_control.yaml \
   --receipts runs/run0/receipts.jsonl \
   --out runs/run0/classified.jsonl \
   --metrics runs/run0/classification_metrics.json
+solve classify-value experiments/run0_nat_control.yaml \
+  --receipts runs/run0/receipts.jsonl \
+  --out runs/run0/value_classified.jsonl \
+  --metrics runs/run0/value_metrics.json
 python -m pytest
 python -m pytest -m lean

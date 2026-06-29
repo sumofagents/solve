@@ -13,6 +13,8 @@ AutomationClassification = Literal[
     "not_trivial_under_bound",
     "automation_error",
 ]
+FromScratchClosure = Literal["closed", "not_closed", "timeout", "error", "unknown"]
+NoveltyClassification = Literal["unknown", "existing_defeq_duplicate", "novel_in_imported_env"]
 
 
 class StrictModel(BaseModel):
@@ -44,7 +46,14 @@ class CandidateReceipt(StrictModel):
     normalized_statement_hash: str
     axioms_used: list[str] = Field(default_factory=list)
     replay: ReplayResult
-    novelty_classification: Literal["unknown", "existing_defeq_duplicate", "novel_in_imported_env"] = "unknown"
+    structural_packaging: bool | None = None
+    structural_packaging_reason: str | None = None
+    ingredient_trivial_by_automation: bool | None = None
+    ingredient_trivial_closed_by: str | None = None
+    from_scratch_closure: FromScratchClosure | None = None
+    novelty_classification: NoveltyClassification = "unknown"
+    promotable: bool | None = None
+    downstream_used: bool | None = None
     interestingness_classification: Literal["unknown", "trivial", "nontrivial", "downstream_used"] = "unknown"
     automation_attempted: list[str] = Field(default_factory=list)
     automation_closed_by: str | None = None

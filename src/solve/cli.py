@@ -13,6 +13,7 @@ from solve.experiments.spec import load_experiment_spec
 from solve.lean.atoms import enumerate_atoms
 from solve.lean.replay import find_tool, replay_file, write_smoke_module
 from solve.lean.triviality import classify_triviality
+from solve.lean.value import classify_value
 from solve.loop import run_control
 
 
@@ -219,6 +220,41 @@ def command_classify_triviality(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_classify_value(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    receipts = _resolve_output_path(args.receipts, repo)
+    out_classified = _resolve_output_path(args.out, repo)
+    out_metrics = _resolve_output_path(args.metrics, repo)
+    try:
+        metrics = classify_value(
+            args.spec,
+            repo=repo,
+            receipts_path=receipts,
+            out_path=out_classified,
+            metrics_path=out_metrics,
+            heartbeat_budget=args.heartbeat_budget,
+            step_budget=args.step_budget,
+            timeout_seconds=args.timeout,
+            novelty_candidate_cap=args.novelty_candidate_cap,
+            novelty_heartbeat_budget=args.novelty_heartbeat_budget,
+            novelty_timeout_seconds=args.novelty_timeout,
+            max_receipts=args.max_receipts,
+        )
+    except Exception as exc:
+        print(f"CLASSIFY_VALUE_FAIL {args.spec}", file=sys.stderr)
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(
+        f"CLASSIFY_VALUE_OK {args.spec} classified={metrics.retained_receipts_classified} "
+        f"promotable={metrics.counts_by_promotable.get('true', 0)} "
+        f"novel={metrics.counts_by_novelty_classification.get('novel_in_imported_env', 0)} "
+        f"structural={metrics.counts_by_structural_packaging.get('true', 0)} "
+        f"ingredient_trivial={metrics.counts_by_ingredient_trivial.get('true', 0)} "
+        f"out={out_classified}"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="solve")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -272,6 +308,24 @@ def build_parser() -> argparse.ArgumentParser:
     classify_parser.add_argument("--max-receipts", type=int, default=None)
     classify_parser.add_argument("--repo", default=".")
     classify_parser.set_defaults(func=command_classify_triviality)
+
+    value_parser = sub.add_parser(
+        "classify-value",
+        help="classify retained receipts by truth, novelty, triviality, and interestingness",
+    )
+    value_parser.add_argument("spec")
+    value_parser.add_argument("--receipts", required=True)
+    value_parser.add_argument("--out", required=True)
+    value_parser.add_argument("--metrics", required=True)
+    value_parser.add_argument("--heartbeat-budget", type=int, default=20_000)
+    value_parser.add_argument("--step-budget", type=int, default=1_000)
+    value_parser.add_argument("--timeout", type=int, default=30)
+    value_parser.add_argument("--novelty-candidate-cap", type=int, default=5_000)
+    value_parser.add_argument("--novelty-heartbeat-budget", type=int, default=20_000)
+    value_parser.add_argument("--novelty-timeout", type=int, default=60)
+    value_parser.add_argument("--max-receipts", type=int, default=None)
+    value_parser.add_argument("--repo", default=".")
+    value_parser.set_defaults(func=command_classify_value)
 
     return parser
 

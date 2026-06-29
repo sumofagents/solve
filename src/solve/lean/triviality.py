@@ -17,10 +17,18 @@ from pydantic import Field
 from solve.experiments.spec import ExperimentSpec, load_experiment_spec
 from solve.lean.replay import find_tool
 from solve.verify.candidates import StrictFrozenModel
-from solve.verify.receipts import AutomationClassification, CandidateReceipt
+from solve.verify.receipts import AutomationClassification, CandidateReceipt, FromScratchClosure
 
 
 TACTIC_BOUQUET = ("simp", "decide", "omega", "tauto", "simp?", "exact?")
+INGREDIENT_BOUQUET = (
+    "simp [{a}, {b}]",
+    "decide",
+    "omega",
+    "exact ⟨{a}, {b}⟩",
+    "simp_all [{a}, {b}]",
+    "exact?",
+)
 TRIVIAL_BY_AUTOMATION: AutomationClassification = "trivial_by_automation"
 NOT_TRIVIAL_UNDER_BOUND: AutomationClassification = "not_trivial_under_bound"
 AUTOMATION_ERROR: AutomationClassification = "automation_error"
@@ -52,7 +60,13 @@ class AttemptResult:
 
     @property
     def closed(self) -> bool:
-        return self.exit_code == 0 and not self.timed_out and self.runner_error is None
+        output = f"{self.stdout}\n{self.stderr}"
+        return (
+            self.exit_code == 0
+            and not self.timed_out
+            and self.runner_error is None
+            and "sorryAx" not in output
+        )
 
     @property
     def infrastructure_error(self) -> bool:
@@ -104,7 +118,7 @@ def _transient_module_text(
     theorem_name: str,
     imports: list[str],
     statement: str,
-    tactic: str,
+    tactic_template: str,
     bounds: AutomationBounds,
 ) -> str:
     lines: list[str] = []
@@ -117,7 +131,7 @@ def _transient_module_text(
     lines.append("")
     lines.append(f"theorem {theorem_name} :")
     lines.append(f"  ({statement}) := by")
-    lines.append(f"  {tactic}")
+    lines.append(f"  {tactic_template}")
     lines.append("")
     lines.append("end Solve.Generated.Triviality")
     lines.append("")
@@ -149,7 +163,7 @@ def _attempt_tactic(
         theorem_name=theorem_name,
         imports=imports,
         statement=receipt.statement.strip(),
-        tactic=tactic,
+        tactic_template=tactic,
         bounds=bounds,
     )
     module_path = transient_dir / f"Triviality_{theorem_name}.lean"
@@ -184,7 +198,7 @@ def _run_import_probe(
         theorem_name="import_probe",
         imports=imports,
         statement="True",
-        tactic="trivial",
+        tactic_template="trivial",
         bounds=bounds,
     )
     module_path = transient_dir / "Triviality_import_probe.lean"
@@ -229,7 +243,12 @@ def _statement_can_be_embedded(statement: str) -> bool:
     return bool(stripped) and "\n" not in stripped and "\r" not in stripped
 
 
-def classify_receipt(
+def _nonzero_looks_like_unsolved_goals(result: AttemptResult) -> bool:
+    output = f"{result.stdout}\n{result.stderr}".lower()
+    return "unsolved goals" in output or "unsolved goal" in output
+
+
+def classify_from_scratch_closure(
     raw_receipt: dict[str, object],
     *,
     receipt: CandidateReceipt,
@@ -239,11 +258,11 @@ def classify_receipt(
     transient_dir: Path,
     runner: LeanRunner = _run_lake_env_lean,
 ) -> dict[str, object]:
-    """Return one classified receipt object, preserving the original fields."""
+    """Return one from-scratch classified receipt object, preserving original fields."""
     classified = dict(raw_receipt)
     attempted: list[str] = []
     closed_by: str | None = None
-    saw_infrastructure_error = False
+    closure: FromScratchClosure | None = None
 
     if not _statement_can_be_embedded(receipt.statement):
         classified.update(
@@ -253,6 +272,7 @@ def classify_receipt(
                 "automation_heartbeat_budget": bounds.heartbeat_budget,
                 "automation_step_budget": bounds.step_budget,
                 "automation_classification": AUTOMATION_ERROR,
+                "from_scratch_closure": "error",
             }
         )
         return classified
@@ -269,17 +289,24 @@ def classify_receipt(
             runner=runner,
         )
         if result.infrastructure_error:
-            # Fail closed: a runaway/errored tactic must never let a later
-            # tactic produce a "closed" classification. Stop immediately.
-            saw_infrastructure_error = True
+            # Fail closed: a runaway/errored tactic must never let a later tactic
+            # produce a "closed" classification. Stop immediately.
+            closure = "timeout" if result.timed_out else "error"
             break
         if result.closed:
             closed_by = tactic
+            closure = "closed"
+            break
+        if not _nonzero_looks_like_unsolved_goals(result):
+            closure = "error"
             break
 
-    if saw_infrastructure_error:
+    if closure is None:
+        closure = "not_closed"
+
+    if closure in {"timeout", "error"}:
         classification: AutomationClassification = AUTOMATION_ERROR
-    elif closed_by is not None:
+    elif closure == "closed":
         classification = TRIVIAL_BY_AUTOMATION
     else:
         classification = NOT_TRIVIAL_UNDER_BOUND
@@ -291,9 +318,106 @@ def classify_receipt(
             "automation_heartbeat_budget": bounds.heartbeat_budget,
             "automation_step_budget": bounds.step_budget,
             "automation_classification": classification,
+            "from_scratch_closure": closure,
         }
     )
     return classified
+
+
+def _template_references_parents(tactic_template: str) -> bool:
+    return "{a}" in tactic_template or "{b}" in tactic_template
+
+
+def _statement_looks_like_and_goal(statement: str) -> bool:
+    return "∧" in statement or "And " in statement or "And." in statement
+
+
+def _render_ingredient_tactics(receipt: CandidateReceipt) -> list[str]:
+    rendered: list[str] = []
+    for tactic_template in INGREDIENT_BOUQUET:
+        if tactic_template == "exact ⟨{a}, {b}⟩" and not _statement_looks_like_and_goal(receipt.statement):
+            continue
+        if _template_references_parents(tactic_template):
+            if len(receipt.parents) < 2:
+                continue
+            rendered.append(tactic_template.format(a=receipt.parents[0], b=receipt.parents[1]))
+        else:
+            rendered.append(tactic_template)
+    return rendered
+
+
+def classify_ingredient_triviality(
+    raw_receipt: dict[str, object],
+    *,
+    receipt: CandidateReceipt,
+    spec: ExperimentSpec,
+    repo: Path,
+    bounds: AutomationBounds,
+    transient_dir: Path,
+    runner: LeanRunner = _run_lake_env_lean,
+) -> dict[str, object]:
+    classified = dict(raw_receipt)
+    closed_by: str | None = None
+    ingredient_trivial: bool | None = False
+
+    if not _statement_can_be_embedded(receipt.statement):
+        classified.update(
+            {
+                "ingredient_trivial_by_automation": None,
+                "ingredient_trivial_closed_by": None,
+            }
+        )
+        return classified
+
+    for tactic in _render_ingredient_tactics(receipt):
+        result = _attempt_tactic(
+            receipt=receipt,
+            repo=repo,
+            imports=list(spec.lean.imports),
+            tactic=tactic,
+            bounds=bounds,
+            transient_dir=transient_dir,
+            runner=runner,
+        )
+        if result.infrastructure_error:
+            ingredient_trivial = None
+            break
+        if result.closed:
+            ingredient_trivial = True
+            closed_by = tactic
+            break
+        if not _nonzero_looks_like_unsolved_goals(result):
+            ingredient_trivial = None
+            break
+
+    classified.update(
+        {
+            "ingredient_trivial_by_automation": ingredient_trivial,
+            "ingredient_trivial_closed_by": closed_by,
+        }
+    )
+    return classified
+
+
+def classify_receipt(
+    raw_receipt: dict[str, object],
+    *,
+    receipt: CandidateReceipt,
+    spec: ExperimentSpec,
+    repo: Path,
+    bounds: AutomationBounds,
+    transient_dir: Path,
+    runner: LeanRunner = _run_lake_env_lean,
+) -> dict[str, object]:
+    return classify_from_scratch_closure(
+        raw_receipt,
+        receipt=receipt,
+        spec=spec,
+        repo=repo,
+        bounds=bounds,
+        transient_dir=transient_dir,
+        runner=runner,
+    )
 
 
 def _read_receipt_objects(path: str | Path) -> list[tuple[dict[str, object], CandidateReceipt]]:
@@ -409,7 +533,7 @@ def classify_triviality(
             if max_receipts is not None and len(classified_records) >= max_receipts:
                 cap_skipped_count += 1
                 continue
-            classified = classify_receipt(
+            classified = classify_from_scratch_closure(
                 raw,
                 receipt=receipt,
                 spec=spec,

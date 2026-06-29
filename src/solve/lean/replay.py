@@ -31,6 +31,33 @@ def find_tool(name: str) -> str:
     raise FileNotFoundError(f"could not find {name!r} on PATH or under ~/.elan/bin")
 
 
+def build_modules(repo: str | Path, modules: list[str], timeout: int = 300) -> None:
+    """Compile lake modules into the build graph so transient probe files can import them.
+
+    Only modules that are part of the current lake project (i.e. under the Solve
+    namespace or any other project-local namespace) need building; stdlib and
+    dependency modules are already available. We attempt to build all requested
+    modules in one lake invocation; if any fail, the caller gets a RuntimeError.
+    """
+    project_modules = [m for m in modules if not m.startswith(("Init", "Lean", "Std", "Mathlib", "Batteries", "Qq", "Aesop"))]
+    if not project_modules:
+        return
+    repo_path = Path(repo)
+    if not (repo_path / "lakefile.lean").exists():
+        return
+    result = subprocess.run(
+        [find_tool("lake"), "build", *project_modules],
+        cwd=repo_path,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"lake build {' '.join(project_modules)} failed:\n{result.stdout}{result.stderr}"
+        )
+
+
 def write_smoke_module(path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
