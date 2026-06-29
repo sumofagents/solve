@@ -13,6 +13,8 @@ CORE_MODULES = [
     ROOT / "src" / "solve" / "lean" / "value.py",
     ROOT / "src" / "solve" / "promote.py",
     ROOT / "src" / "solve" / "lean" / "promote_codegen.py",
+    ROOT / "src" / "solve" / "lean" / "usage.py",
+    ROOT / "src" / "solve" / "lean" / "downstream.py",
     ROOT / "src" / "solve" / "verify" / "candidates.py",
     ROOT / "src" / "solve" / "grammar" / "and_intro.py",
 ]

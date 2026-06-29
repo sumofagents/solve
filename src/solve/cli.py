@@ -294,6 +294,37 @@ def command_classify_value(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_mark_downstream_used(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    epoch0_receipts = _resolve_output_path(args.epoch0_receipts, repo)
+    epoch1_receipts = _resolve_output_path(args.epoch1_receipts, repo)
+    promoted = _resolve_output_path(args.promoted, repo)
+    try:
+        from solve.lean.downstream import mark_downstream_used
+
+        summary = mark_downstream_used(
+            args.spec,
+            repo=repo,
+            epoch0_receipts_path=epoch0_receipts,
+            epoch1_receipts_path=epoch1_receipts,
+            promoted_path=promoted,
+            timeout=args.timeout,
+            heartbeat_budget=args.heartbeat_budget,
+            rec_depth=args.rec_depth,
+            max_constants=args.max_constants,
+            max_receipts=args.max_receipts,
+        )
+    except Exception as exc:
+        print(f"DOWNSTREAM_USED_FAIL {args.spec}", file=sys.stderr)
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(
+        f"DOWNSTREAM_USED_OK epoch0={summary.epoch0} promoted={summary.promoted} "
+        f"used={summary.used} consumers={summary.consumers} probe_unknown={summary.probe_unknown}"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="solve")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -377,6 +408,22 @@ def build_parser() -> argparse.ArgumentParser:
     value_parser.add_argument("--promoted", default=None, help="promoted.jsonl path for epoch >= 1 novelty refinement")
     value_parser.add_argument("--repo", default=".")
     value_parser.set_defaults(func=command_classify_value)
+
+    downstream_parser = sub.add_parser(
+        "mark-downstream-used",
+        help="mark epoch-0 receipts used by retained epoch-1 promoted-atom consumers",
+    )
+    downstream_parser.add_argument("spec")
+    downstream_parser.add_argument("--epoch0-receipts", required=True)
+    downstream_parser.add_argument("--epoch1-receipts", required=True)
+    downstream_parser.add_argument("--promoted", required=True)
+    downstream_parser.add_argument("--repo", default=".")
+    downstream_parser.add_argument("--timeout", type=int, default=60)
+    downstream_parser.add_argument("--heartbeat-budget", type=int, default=20_000)
+    downstream_parser.add_argument("--rec-depth", type=int, default=1_000)
+    downstream_parser.add_argument("--max-constants", type=int, default=10_000)
+    downstream_parser.add_argument("--max-receipts", type=int, default=None)
+    downstream_parser.set_defaults(func=command_mark_downstream_used)
 
     return parser
 

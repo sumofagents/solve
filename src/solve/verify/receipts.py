@@ -54,6 +54,7 @@ class CandidateReceipt(StrictModel):
     novelty_classification: NoveltyClassification = "unknown"
     promotable: bool | None = None
     downstream_used: bool | None = None
+    downstream_used_by: list[str] | None = None
     interestingness_classification: Literal["unknown", "trivial", "nontrivial", "downstream_used"] = "unknown"
     automation_attempted: list[str] = Field(default_factory=list)
     automation_closed_by: str | None = None
