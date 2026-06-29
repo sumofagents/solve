@@ -6,6 +6,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CORE_MODULES = [
     ROOT / "src" / "solve" / "loop.py",
     ROOT / "src" / "solve" / "lean" / "atoms.py",
+    ROOT / "src" / "solve" / "lean" / "codegen.py",
+    ROOT / "src" / "solve" / "verify" / "candidates.py",
+    ROOT / "src" / "solve" / "grammar" / "and_intro.py",
 ]
 
 

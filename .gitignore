@@ -22,3 +22,4 @@ runs/
 receipts/latest/
 lean/Solve/Generated/ImportProbe_*.lean
 lean/Solve/Generated/AtomDump_*.lean
+lean/Solve/Generated/RunControl_*.lean

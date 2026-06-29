@@ -12,6 +12,7 @@ from pathlib import Path
 from solve.experiments.spec import load_experiment_spec
 from solve.lean.atoms import enumerate_atoms
 from solve.lean.replay import find_tool, replay_file, write_smoke_module
+from solve.loop import run_control
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int = 60) -> subprocess.CompletedProcess[str]:
@@ -157,6 +158,37 @@ def command_replay_smoke(args: argparse.Namespace) -> int:
     return result.returncode
 
 
+def _resolve_output_path(path: str, repo: Path) -> Path:
+    out = Path(path)
+    if not out.is_absolute():
+        out = repo / out
+    return out
+
+
+def command_run_control(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    out_receipts = _resolve_output_path(args.out, repo)
+    out_metrics = _resolve_output_path(args.metrics, repo) if args.metrics else None
+    try:
+        metrics = run_control(
+            args.spec,
+            repo=repo,
+            out_receipts=out_receipts,
+            out_metrics=out_metrics,
+            max_candidates=args.max_candidates,
+            timeout=args.timeout,
+        )
+    except Exception as exc:
+        print(f"RUN_CONTROL_FAIL {args.spec}", file=sys.stderr)
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(
+        f"RUN_CONTROL_OK {args.spec} candidates={metrics.candidate_count} "
+        f"retained={metrics.retained_count} out={out_receipts}"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="solve")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -186,6 +218,15 @@ def build_parser() -> argparse.ArgumentParser:
     replay_smoke.add_argument("--repo", default=".")
     replay_smoke.add_argument("--path", default=None)
     replay_smoke.set_defaults(func=command_replay_smoke)
+
+    run_control_parser = sub.add_parser("run-control", help="run the phase-2 And.intro structural control")
+    run_control_parser.add_argument("spec")
+    run_control_parser.add_argument("--out", required=True)
+    run_control_parser.add_argument("--metrics", default=None)
+    run_control_parser.add_argument("--max-candidates", type=int, default=10)
+    run_control_parser.add_argument("--repo", default=".")
+    run_control_parser.add_argument("--timeout", type=int, default=600)
+    run_control_parser.set_defaults(func=command_run_control)
 
     return parser
 

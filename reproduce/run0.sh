@@ -14,5 +14,9 @@ fi
 solve validate experiments/run0_nat_control.yaml
 solve check-imports experiments/run0_nat_control.yaml
 solve enumerate-atoms experiments/run0_nat_control.yaml --out .hermes/atoms_run0.json
+solve run-control experiments/run0_nat_control.yaml \
+  --out runs/run0/receipts.jsonl \
+  --metrics runs/run0/metrics.json \
+  --max-candidates 10
 python -m pytest
 python -m pytest -m lean
