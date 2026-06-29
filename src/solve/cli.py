@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 from solve.experiments.spec import load_experiment_spec
+from solve.lean.atoms import enumerate_atoms
 from solve.lean.replay import find_tool, replay_file, write_smoke_module
 
 
@@ -40,7 +42,7 @@ def command_doctor(args: argparse.Namespace) -> int:
         fh.write("theorem solve_doctor_smoke : 1 + 1 = 2 := by\n  rfl\n")
         smoke = Path(fh.name)
     try:
-        result = _run([lean, str(smoke)], repo)
+        result = replay_file(smoke, cwd=repo)
         if result.returncode != 0:
             print("lean smoke: FAIL", file=sys.stderr)
             print(result.stderr, file=sys.stderr)
@@ -70,6 +72,69 @@ def command_validate(args: argparse.Namespace) -> int:
             f"VALID {spec_path}: name={spec.name} imports={','.join(spec.lean.imports)} "
             f"operators={len(spec.grammar.all_operators)} max_depth={spec.bounds.max_depth}"
         )
+    return 0
+
+
+def _safe_generated_suffix(name: str) -> str:
+    suffix = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in name).strip("_")
+    if not suffix:
+        suffix = "spec"
+    if suffix[0].isdigit():
+        suffix = f"spec_{suffix}"
+    return suffix
+
+
+def _write_import_probe(spec_path: str, repo: Path) -> Path:
+    spec = load_experiment_spec(spec_path)
+    target = repo / "lean" / "Solve" / "Generated" / f"ImportProbe_{_safe_generated_suffix(spec.name)}.lean"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    imports = "\n".join(f"import {imp}" for imp in spec.lean.imports)
+    target.write_text(f"{imports}\n\n#check True\n", encoding="utf-8")
+    return target
+
+
+def command_check_imports(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    failed = False
+    for spec_path in args.specs:
+        target = _write_import_probe(spec_path, repo)
+        result = replay_file(target, cwd=repo, timeout=args.timeout)
+        if result.returncode == 0:
+            target.unlink(missing_ok=True)
+            print(f"IMPORTS_OK {spec_path}")
+        else:
+            failed = True
+            print(f"IMPORTS_FAIL {spec_path}", file=sys.stderr)
+            if result.stdout:
+                print(result.stdout, end="", file=sys.stderr)
+            if result.stderr:
+                print(result.stderr, end="", file=sys.stderr)
+    return 1 if failed else 0
+
+
+def command_enumerate_atoms(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    spec = load_experiment_spec(args.spec)
+    try:
+        records = enumerate_atoms(spec, repo=repo, timeout=args.timeout)
+    except Exception as exc:
+        print(f"ATOM_ENUM_FAIL {args.spec}", file=sys.stderr)
+        print(str(exc), file=sys.stderr)
+        return 1
+    payload = {
+        "spec": args.spec,
+        "records": [record.model_dump(mode="json") for record in records],
+    }
+    rendered = json.dumps(payload, indent=2, sort_keys=True)
+    if args.out:
+        out = Path(args.out)
+        if not out.is_absolute():
+            out = repo / out
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(rendered + "\n", encoding="utf-8")
+        print(f"ATOMS_OK {args.spec} count={len(records)} out={out}")
+    else:
+        print(rendered)
     return 0
 
 
@@ -103,6 +168,19 @@ def build_parser() -> argparse.ArgumentParser:
     validate = sub.add_parser("validate", help="validate one or more ExperimentSpec YAML/JSON files")
     validate.add_argument("specs", nargs="+")
     validate.set_defaults(func=command_validate)
+
+    check_imports = sub.add_parser("check-imports", help="validate Lean imports for one or more specs")
+    check_imports.add_argument("specs", nargs="+")
+    check_imports.add_argument("--repo", default=".")
+    check_imports.add_argument("--timeout", type=int, default=300)
+    check_imports.set_defaults(func=command_check_imports)
+
+    enumerate_atoms_parser = sub.add_parser("enumerate-atoms", help="enumerate seed atoms from imported Lean environments")
+    enumerate_atoms_parser.add_argument("spec")
+    enumerate_atoms_parser.add_argument("--out", default=None)
+    enumerate_atoms_parser.add_argument("--repo", default=".")
+    enumerate_atoms_parser.add_argument("--timeout", type=int, default=300)
+    enumerate_atoms_parser.set_defaults(func=command_enumerate_atoms)
 
     replay_smoke = sub.add_parser("replay-smoke", help="write and replay a generated Lean smoke theorem")
     replay_smoke.add_argument("--repo", default=".")

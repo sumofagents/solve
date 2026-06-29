@@ -23,6 +23,7 @@ DEDUP_POLICIES = {
 }
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_LEAN_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_']*(\.[A-Za-z_][A-Za-z0-9_']*)*$")
 
 
 class StrictModel(BaseModel):
@@ -43,6 +44,10 @@ class LeanSpec(StrictModel):
                 raise ValueError("imports may not contain empty module names")
             if imp in UNBOUNDED_IMPORTS:
                 raise ValueError("unbounded import Mathlib is forbidden for normal experiments")
+            if not _LEAN_MODULE_RE.match(imp):
+                raise ValueError(
+                    "imports must be plain Lean module names with no whitespace, comments, or commands"
+                )
             cleaned.append(imp)
         if len(set(cleaned)) != len(cleaned):
             raise ValueError("imports must be unique")

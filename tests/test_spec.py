@@ -32,6 +32,19 @@ def test_unbounded_mathlib_import_rejected():
         ExperimentSpec.model_validate(data)
 
 
+def test_imports_reject_comments_and_command_injection():
+    data = yaml.safe_load((ROOT / "experiments" / "run0_nat_control.yaml").read_text())
+    bad_imports = [
+        "Mathlib.Data.Nat.Basic -- comment",
+        "Mathlib.Data.Nat.Basic\n#eval IO.println \"pwn\"",
+        "Mathlib Data Nat Basic",
+    ]
+    for bad in bad_imports:
+        data["lean"]["imports"] = [bad]
+        with pytest.raises(ValidationError, match="plain Lean module names"):
+            ExperimentSpec.model_validate(data)
+
+
 def test_replay_retention_gate_cannot_be_disabled():
     data = yaml.safe_load((ROOT / "experiments" / "run0_nat_control.yaml").read_text())
     data["promotion"]["require_replay"] = False

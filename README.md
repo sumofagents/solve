@@ -17,9 +17,17 @@ python -m pip install -e ".[dev]"
 solve doctor
 solve validate experiments/run0_nat_control.yaml experiments/run1_list_basic_depth2.yaml
 solve replay-smoke
+solve check-imports experiments/run0_nat_control.yaml experiments/run1_list_basic_depth2.yaml
+solve enumerate-atoms experiments/run0_nat_control.yaml --out .hermes/atoms_run0.json
+solve enumerate-atoms experiments/run1_list_basic_depth2.yaml --out .hermes/atoms_run1.json
 python -m pytest
 python -m pytest -m lean
+bash reproduce/run0.sh
+bash reproduce/run1.sh
 ```
+
+`solve check-imports` renders the spec's bounded imports and runs them under `lake env lean`.
+`solve enumerate-atoms` inspects the imported Lean environment and emits machine-readable seed atom records. It does not parse mathlib source text.
 
 The trust boundary is strict:
 
