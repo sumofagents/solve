@@ -47,17 +47,3 @@ def closed_implication(atom: AtomRecord) -> bool:
         and not has_omitted_pp(atom)
         and parse_implication(atom.type_pp) is not None
     )
-
-
-def congrarg_fn_head_matches(fn_atom: AtomRecord, equality_parsed) -> bool:
-    """congrArg head-name guard: the leading whitespace-delimited token of
-    equality_parsed.lhs must equal fn_atom.name OR end with '.<fn_atom.name>'.
-    This is a NECESSARY condition for congrArg @fn @eq to elaborate (the
-    function head must appear as the head of the equality's lhs). Example:
-    fn='List.length', equality_parsed.lhs='List.length xs' -> True.
-    fn='List.reverse', equality_parsed.lhs='List.length xs' -> False."""
-    lhs_parts = equality_parsed.lhs.strip().split(maxsplit=1)
-    if not lhs_parts:
-        return False
-    head = lhs_parts[0]
-    return head == fn_atom.name or head.endswith(f".{fn_atom.name}")

@@ -26,6 +26,10 @@ def atom(
 
 
 def test_generator_emits_ordered_function_equality_pairs():
+    """Without domain-type info, congrArg proposes ALL arity>=1 functions x
+    closed equalities. Replay is the truth gate (Python proposes, Lean disposes).
+    This test verifies the proposal ordering: functions sorted by name, then
+    equalities sorted by name within each function."""
     candidates = generate_congr_arg_candidates(
         [
             atom("F.g", "theorem", "Nat → Nat", 1),
@@ -36,8 +40,11 @@ def test_generator_emits_ordered_function_equality_pairs():
         max_candidates=10,
         experiment_name="x",
     )
+    # F.f pairs with both equalities (sorted: E.h1 before E.h2), then F.g
     assert [candidate.parents for candidate in candidates] == [
         ("F.f", "E.h1"),
+        ("F.f", "E.h2"),
+        ("F.g", "E.h1"),
         ("F.g", "E.h2"),
     ]
     assert candidates[0].statement == "F.f (F.f a) = F.f (F.f b)"
@@ -62,18 +69,6 @@ def test_generator_filters_non_functions_and_wrong_equality_shapes():
 
 def test_generator_zero_cap_yields_empty_list():
     assert generate_congr_arg_candidates([], max_candidates=0, experiment_name="x") == []
-
-
-def test_rejects_fn_head_mismatch():
-    candidates = generate_congr_arg_candidates(
-        [
-            atom("F.f", "def", "Nat → Nat", 1),
-            atom("E.h", "theorem", "F.g a = F.g b"),
-        ],
-        max_candidates=10,
-        experiment_name="x",
-    )
-    assert candidates == []
 
 
 def test_rejects_eq_atom_with_binders():

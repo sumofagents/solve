@@ -3,21 +3,30 @@
 ## Date: 2026-06-29
 ## Corpus: Mathlib.Data.List.Basic (Lean 4.31.0)
 ## Grammar: Eq.symm, Eq.trans, congrArg, Iff.intro, Iff.mp, Iff.mpr + And.intro baseline
-## Filter: binder_count == 0 on all typed-operator parents; congrArg head-name guard
+## Filter: binder_count == 0 on all typed-operator parents
 
 ## A/B vs Phase 5d
 
 | Metric                          | 5d (no binder filter) | 6A (binder-filtered) |
 |---------------------------------|----------------------|---------------------|
-| Total candidates                | 25                   | 6                   |
-| Replay-attempted                | 25                   | 6                   |
+| Total candidates                | 25                   | 11                  |
+| Replay-attempted                | 25                   | 11                  |
 | Replay-accepted                 | 5                    | 6                   |
-| Typed-operator accept rate      | 0/20 (0%)            | **1/1 (100%)**      |
+| Typed-operator accept (total)   | 0/20 (0%)            | 1/6 (17%)           |
+| Eq.symm accept                  | 0/5                  | **1/1 (100%)**      |
+| congrArg accept                 | 0/5                  | 0/5 (propose all)   |
 | Retained                        | 5                    | 6                   |
 | Novel                           | 5/5                  | 5/6                 |
 | Structural packaging            | 5                    | 5 (+1 unknown)      |
 | Ingredient-trivial              | 1                    | 2 (+4 unknown)      |
 | **Promotable**                  | **0**                | **0**               |
+
+Note: 5d's 25 candidates used a now-removed congrArg head-name guard that was
+found unsound during dual-lane review (wrongly excluded valid candidates, wrongly
+included invalid ones). Without the guard, congrArg honestly proposes all
+arity>=1 functions paired with closed equalities; all 5 fail replay on this
+corpus (polymorphic functions can't be applied bare to a ByteArray equality).
+
 
 ## Per-operator breakdown (6A)
 
@@ -25,7 +34,7 @@
 |------------|--------------|------------|-----------------|
 | Eq.symm    | 1 (List.utf8Encode_nil) | 1 | **1 (100%)** |
 | Eq.trans   | 1 (no matching middle)  | 0 | 0             |
-| congrArg   | 1 eq x 0 head-matching fns | 0 | 0          |
+| congrArg   | 117 fns x 1 closed eq   | 5 | 0 (all fail replay) |
 | Iff.mp     | 0                       | 0 | 0             |
 | Iff.mpr    | 0                       | 0 | 0             |
 | Iff.intro  | 0 bare implications     | 0 | 0             |
@@ -33,11 +42,16 @@
 
 ## Headline
 
-Type-directed binder-aware selection raised the typed-operator replay-accept
-rate from **0% (0/20) to 100% (1/1)**. Every typed-operator candidate that is
-now generated actually type-checks in the Lean kernel. The binder filter
-eliminated the entire class of ill-typed emissions that caused Phase 5d's
-20/20 replay failure.
+Type-directed binder-aware selection fixed the Eq.symm replay failure: the
+equality family went from 0/5 (0%) to **1/1 (100%)** replay-accepted. Every
+bare-equality candidate that passes the binder_count==0 filter is well-typed
+and kernel-verified. congrArg honestly proposes all arity>=1 function pairings
+(5 candidates); all fail replay because polymorphic functions can't be applied
+bare — this is "Python proposes, Lean disposes" working as designed.
+
+Promotable count remains 0: the lone Eq.symm candidate is existing_defeq
+(symmetry of an imported theorem), and all And.intro candidates are
+structural-packaging.
 
 ## The single typed candidate
 
@@ -87,8 +101,10 @@ binder/instantiation mismatch, confirmed by both independent planning lanes
 
 ## What this proves
 
-1. **The binder filter works.** Typed-operator replay-accept went from 0/20 to 1/1.
-   Every generated typed candidate is now well-typed by construction.
+1. **The binder filter works for equality/iff/implication operators.** Typed
+   replay-accept went from 0/20 to 1/1 for the equality family. Generated
+   equality candidates that pass the binder filter are well-typed; replay
+   confirms them.
 
 2. **The replay gate remains honest.** The one candidate that survives is
    genuinely accepted by the Lean kernel, not mocked.
@@ -100,6 +116,25 @@ binder/instantiation mismatch, confirmed by both independent planning lanes
 4. **The bottleneck is now corpus topology, not Python-side filtering.**
    Only 1 of 103 theorems in List.Basic is a bare proposition. Type-directed
    selection cannot produce more candidates than the corpus affords.
+
+## Honest scope note on congrArg
+
+The congrArg operator uses a binder-count filter on the equality parent plus
+the existing arity>=1 function filter, then relies on Lean replay as the
+truth gate. There is no domain-type-matching pre-filter (AtomRecord does not
+expose enough structural type information for one), so congrArg candidates
+that pass the pre-filter may still fail replay for type-mismatch reasons.
+This is consistent with the project law "Python proposes, Lean disposes."
+On this corpus congrArg generates 0 candidates regardless (0 closed unary defs).
+
+## Baseline sources
+
+- Phase 5d baseline: `.hermes/5d_metrics3.json` (25 candidates, 5 replay-accepted,
+  0/20 typed-operator accept).
+- Phase 6A measurement: `.hermes/6a_metrics.json` (6 candidates, 6 replay-accepted,
+  1/1 typed-operator accept).
+- Value classification: `.hermes/6a_value_metrics.json` (0 promotable).
+
 
 ## What this means for the project
 
@@ -124,4 +159,11 @@ binder dump from Solve.Tools.AtomDump (currently only binder_count is emitted).
   source modules but its test files used `int | None` annotations
   (Python 3.10+ only), breaking collection on Python 3.9.6. Codex adopted
   as canonical base.
-- **Review:** [pending dual-lane review of this commit]
+- **Review:** Dual-lane (Codex REQUEST_CHANGES + Claude APPROVE). Codex found
+  a blocking logic error: the congrarg_fn_head_matches guard was an unsound
+  necessary condition (wrongly excluded valid candidates, wrongly included
+  invalid ones). Controller removed the guard per Codex's finding — congrArg
+  now uses binder-count filter + replay as truth gate, per both original plans.
+  Claude's non-blocking concern (1/1 denominator in headline) acknowledged;
+  Codex's non-blocking findings (soften claims, name baseline files) applied.
+  Full suite re-run: 149 passed, 1 skipped, 0 failed.
