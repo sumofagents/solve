@@ -1,14 +1,16 @@
+from __future__ import annotations
+
 from solve.grammar.eq_trans import generate_eq_trans_candidates
 from solve.lean.atoms import AtomRecord
 
 
-def atom(name: str, type_pp: str, kind: str = "theorem") -> AtomRecord:
+def atom(name: str, type_pp: str, kind: str = "theorem", binder_count: int | None = 0) -> AtomRecord:
     return AtomRecord(
         name=name,
         kind=kind,
         type_pp=type_pp,
         type_hash=f"hash-{name}",
-        binder_count=0,
+        binder_count=binder_count,
         arity=0,
         module="Test",
         axioms=[],
@@ -33,6 +35,18 @@ def test_generator_filters_non_theorems_wrong_shapes_and_nonmatching_middle():
             atom("B.bad", "P ↔ Q"),
             atom("C.def", "b = c", "def"),
             atom("D.xy", "x = y"),
+        ],
+        max_candidates=10,
+        experiment_name="x",
+    )
+    assert candidates == []
+
+
+def test_rejects_atom_with_binders():
+    candidates = generate_eq_trans_candidates(
+        [
+            atom("A.ab", "∀ x, a x = b x", binder_count=1),
+            atom("B.bc", "∀ x, b x = c x", binder_count=1),
         ],
         max_candidates=10,
         experiment_name="x",

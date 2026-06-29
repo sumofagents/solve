@@ -189,6 +189,8 @@ def _promoted_atom_as_atom(record: PromotedAtomRecord) -> AtomRecord:
         kind="theorem",
         type_pp=record.statement,
         type_hash="sha256:" + hashlib.sha256(record.statement.encode("utf-8")).hexdigest(),
+        # TODO(6b): promoted atoms get binder_count=None, which fail-closed excludes from
+        # typed-operator selection. Fix in Phase 6b when AtomDump emits a structured binder list.
         binder_count=None,
         arity=None,
         module=record.promoted_module,

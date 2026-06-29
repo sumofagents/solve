@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from solve.grammar.type_directed import closed_implication
 from solve.grammar.type_shape import parse_implication, render_statement
 from solve.lean.atoms import AtomRecord
 from solve.verify.candidates import GeneratedCandidate, make_candidate_id
@@ -23,10 +24,11 @@ def generate_iff_intro_candidates(
         return []
 
     implications = []
-    for atom in sorted((atom for atom in atoms if atom.kind == "theorem"), key=lambda item: item.name):
+    for atom in sorted((atom for atom in atoms if closed_implication(atom)), key=lambda item: item.name):
         parsed = parse_implication(atom.type_pp)
-        if parsed is not None:
-            implications.append((atom, parsed))
+        if parsed is None:
+            continue
+        implications.append((atom, parsed))
 
     out: list[GeneratedCandidate] = []
     for left_atom, left in implications:

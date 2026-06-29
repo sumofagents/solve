@@ -1,14 +1,16 @@
+from __future__ import annotations
+
 from solve.grammar.iff_mp import generate_iff_mp_candidates
 from solve.lean.atoms import AtomRecord
 
 
-def atom(name: str, type_pp: str, kind: str = "theorem") -> AtomRecord:
+def atom(name: str, type_pp: str, kind: str = "theorem", binder_count: int | None = 0) -> AtomRecord:
     return AtomRecord(
         name=name,
         kind=kind,
         type_pp=type_pp,
         type_hash=f"hash-{name}",
-        binder_count=0,
+        binder_count=binder_count,
         arity=0,
         module="Test",
         axioms=[],
@@ -34,6 +36,15 @@ def test_generator_filters_non_theorems_and_wrong_shapes():
     )
     assert [candidate.parents for candidate in candidates] == [("C.iff",)]
     assert candidates[0].parent_atom_kinds == ("theorem",)
+
+
+def test_rejects_atom_with_binders():
+    candidates = generate_iff_mp_candidates(
+        [atom("A.iff", "∀ x, P x ↔ Q x", binder_count=1)],
+        max_candidates=10,
+        experiment_name="x",
+    )
+    assert candidates == []
 
 
 def test_generator_zero_cap_yields_empty_list():

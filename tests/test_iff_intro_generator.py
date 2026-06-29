@@ -1,14 +1,16 @@
+from __future__ import annotations
+
 from solve.grammar.iff_intro import generate_iff_intro_candidates
 from solve.lean.atoms import AtomRecord
 
 
-def atom(name: str, type_pp: str, kind: str = "theorem") -> AtomRecord:
+def atom(name: str, type_pp: str, kind: str = "theorem", binder_count: int | None = 0) -> AtomRecord:
     return AtomRecord(
         name=name,
         kind=kind,
         type_pp=type_pp,
         type_hash=f"hash-{name}",
-        binder_count=0,
+        binder_count=binder_count,
         arity=0,
         module="Test",
         axioms=[],
@@ -32,6 +34,18 @@ def test_generator_emits_ordered_mirrored_implication_pairs():
 def test_generator_filters_non_theorems_wrong_shapes_and_nonmirrors():
     candidates = generate_iff_intro_candidates(
         [atom("A.forward", "P → Q"), atom("B.nope", "R → P"), atom("C.def", "Q → P", "def")],
+        max_candidates=10,
+        experiment_name="x",
+    )
+    assert candidates == []
+
+
+def test_rejects_atom_with_binders():
+    candidates = generate_iff_intro_candidates(
+        [
+            atom("A.forward", "∀ x, P x → Q x", binder_count=1),
+            atom("B.reverse", "∀ x, Q x → P x", binder_count=1),
+        ],
         max_candidates=10,
         experiment_name="x",
     )

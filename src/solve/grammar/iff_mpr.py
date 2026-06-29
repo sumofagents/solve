@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from solve.grammar.type_directed import closed_iff
 from solve.grammar.type_shape import parse_iff, render_statement
 from solve.lean.atoms import AtomRecord
 from solve.verify.candidates import GeneratedCandidate, make_candidate_id
@@ -23,10 +24,11 @@ def generate_iff_mpr_candidates(
         return []
 
     iff_atoms = []
-    for atom in sorted((atom for atom in atoms if atom.kind == "theorem"), key=lambda item: item.name):
+    for atom in sorted((atom for atom in atoms if closed_iff(atom)), key=lambda item: item.name):
         parsed = parse_iff(atom.type_pp)
-        if parsed is not None:
-            iff_atoms.append((atom, parsed))
+        if parsed is None:
+            continue
+        iff_atoms.append((atom, parsed))
 
     out: list[GeneratedCandidate] = []
     for atom, parsed in iff_atoms:

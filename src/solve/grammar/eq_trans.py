@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from solve.grammar.type_directed import closed_equality
 from solve.grammar.type_shape import parse_equality, render_statement
 from solve.lean.atoms import AtomRecord
 from solve.verify.candidates import GeneratedCandidate, make_candidate_id
@@ -23,10 +24,11 @@ def generate_eq_trans_candidates(
         return []
 
     parsed_atoms = []
-    for atom in sorted((atom for atom in atoms if atom.kind == "theorem"), key=lambda item: item.name):
+    for atom in sorted((atom for atom in atoms if closed_equality(atom)), key=lambda item: item.name):
         parsed = parse_equality(atom.type_pp)
-        if parsed is not None:
-            parsed_atoms.append((atom, parsed))
+        if parsed is None:
+            continue
+        parsed_atoms.append((atom, parsed))
 
     out: list[GeneratedCandidate] = []
     for left_atom, left_parsed in parsed_atoms:

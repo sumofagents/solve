@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from solve.grammar.type_directed import closed_equality, congrarg_fn_head_matches
 from solve.grammar.type_shape import lean_argument, parse_equality, render_statement
 from solve.lean.atoms import AtomRecord
 from solve.verify.candidates import GeneratedCandidate, make_candidate_id
@@ -35,14 +36,17 @@ def generate_congr_arg_candidates(
 
     functions = _function_atoms(atoms)
     equalities = []
-    for atom in sorted((atom for atom in atoms if atom.kind == "theorem"), key=lambda item: item.name):
+    for atom in sorted((atom for atom in atoms if closed_equality(atom)), key=lambda item: item.name):
         parsed = parse_equality(atom.type_pp)
-        if parsed is not None:
-            equalities.append((atom, parsed))
+        if parsed is None:
+            continue
+        equalities.append((atom, parsed))
 
     out: list[GeneratedCandidate] = []
     for function in functions:
         for equality_atom, equality in equalities:
+            if not congrarg_fn_head_matches(function, equality):
+                continue
             parents = (function.name, equality_atom.name)
             index = len(out)
             left = f"{function.name} {lean_argument(equality.lhs)}"

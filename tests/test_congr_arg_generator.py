@@ -4,13 +4,21 @@ from solve.grammar.congr_arg import generate_congr_arg_candidates
 from solve.lean.atoms import AtomRecord
 
 
-def atom(name: str, kind: str, type_pp: str, arity: int | None = 0) -> AtomRecord:
+def atom(
+    name: str,
+    kind: str,
+    type_pp: str,
+    arity: int | None = 0,
+    binder_count: int | None = None,
+) -> AtomRecord:
+    if binder_count is None:
+        binder_count = arity
     return AtomRecord(
         name=name,
         kind=kind,
         type_pp=type_pp,
         type_hash=f"hash-{name}",
-        binder_count=arity,
+        binder_count=binder_count,
         arity=arity,
         module="Test",
         axioms=[],
@@ -22,19 +30,17 @@ def test_generator_emits_ordered_function_equality_pairs():
         [
             atom("F.g", "theorem", "Nat → Nat", 1),
             atom("F.f", "def", "Nat → Nat", 1),
-            atom("E.h2", "theorem", "b = c"),
-            atom("E.h1", "theorem", "a = b"),
+            atom("E.h2", "theorem", "F.g b = F.g c"),
+            atom("E.h1", "theorem", "F.f a = F.f b"),
         ],
         max_candidates=10,
         experiment_name="x",
     )
     assert [candidate.parents for candidate in candidates] == [
         ("F.f", "E.h1"),
-        ("F.f", "E.h2"),
-        ("F.g", "E.h1"),
         ("F.g", "E.h2"),
     ]
-    assert candidates[0].statement == "F.f a = F.f b"
+    assert candidates[0].statement == "F.f (F.f a) = F.f (F.f b)"
     assert all(candidate.operator == "congrArg" for candidate in candidates)
 
 
@@ -45,7 +51,7 @@ def test_generator_filters_non_functions_and_wrong_equality_shapes():
             atom("F.axiom", "axiom", "Nat → Nat", 1),
             atom("E.bad", "theorem", "P ↔ Q"),
             atom("F.f", "def", "Nat → Nat", 1),
-            atom("E.h", "theorem", "a = b"),
+            atom("E.h", "theorem", "F.f a = F.f b"),
         ],
         max_candidates=10,
         experiment_name="x",
@@ -58,11 +64,35 @@ def test_generator_zero_cap_yields_empty_list():
     assert generate_congr_arg_candidates([], max_candidates=0, experiment_name="x") == []
 
 
+def test_rejects_fn_head_mismatch():
+    candidates = generate_congr_arg_candidates(
+        [
+            atom("F.f", "def", "Nat → Nat", 1),
+            atom("E.h", "theorem", "F.g a = F.g b"),
+        ],
+        max_candidates=10,
+        experiment_name="x",
+    )
+    assert candidates == []
+
+
+def test_rejects_eq_atom_with_binders():
+    candidates = generate_congr_arg_candidates(
+        [
+            atom("F.f", "def", "Nat → Nat", 1),
+            atom("E.h", "theorem", "∀ x, F.f x = F.f x", binder_count=1),
+        ],
+        max_candidates=10,
+        experiment_name="x",
+    )
+    assert candidates == []
+
+
 def test_generator_is_deterministic_and_ids_are_stable():
     atoms = [
         atom("F.f", "def", "Nat → Nat", 1),
-        atom("E.h1", "theorem", "a = b"),
-        atom("E.h2", "theorem", "b = c"),
+        atom("E.h1", "theorem", "F.f a = F.f b"),
+        atom("E.h2", "theorem", "F.f b = F.f c"),
     ]
     first = generate_congr_arg_candidates(atoms, max_candidates=10, experiment_name="x")
     second = generate_congr_arg_candidates(atoms, max_candidates=10, experiment_name="x")
@@ -74,8 +104,8 @@ def test_distinct_parent_tuples_have_distinct_ids():
     candidates = generate_congr_arg_candidates(
         [
             atom("F.f", "def", "Nat → Nat", 1),
-            atom("E.h1", "theorem", "a = b"),
-            atom("E.h2", "theorem", "b = c"),
+            atom("E.h1", "theorem", "F.f a = F.f b"),
+            atom("E.h2", "theorem", "F.f b = F.f c"),
         ],
         max_candidates=10,
         experiment_name="x",
