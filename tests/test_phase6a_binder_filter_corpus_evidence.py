@@ -20,7 +20,7 @@ def test_phase6a_binder_filter_corpus_evidence():
     with open(ATOM_DUMP, encoding="utf-8") as handle:
         payload = json.load(handle)
 
-    rows = payload["atoms"] if isinstance(payload, dict) and "atoms" in payload else payload
+    rows = payload["records"] if isinstance(payload, dict) and "records" in payload else payload
     atoms = [AtomRecord.model_validate(row) for row in rows]
 
     assert len(generate_eq_symm_candidates(atoms, max_candidates=50, experiment_name="run1")) <= 1
