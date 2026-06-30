@@ -30,16 +30,16 @@ register_option solve.novelty.verifyMode : String := {
 
 register_option solve.novelty.globalScope : Bool := {
   defValue := false
-  descr := "When true, scan declarations owned by Mathlib modules instead of namespace prefixes."
+  descr := "When true, scan declarations owned by Init/Std/Lean/Mathlib modules instead of namespace prefixes."
 }
 
 register_option solve.novelty.candidateCap : Nat := {
-  defValue := 5000
-  descr := "Maximum number of imported constants to compare."
+  defValue := 500000
+  descr := "Maximum number of imported/global constants to compare."
 }
 
 register_option solve.novelty.heartbeatBudget : Nat := {
-  defValue := 1000
+  defValue := 2000000
   descr := "Per-comparison heartbeat budget for novelty defeq checks."
 }
 
@@ -59,12 +59,15 @@ def allowedKind : ConstantInfo → Bool
   | .opaqueInfo _ => true
   | _ => false
 
-def isMathlibModule (moduleName : String) : Bool :=
-  moduleName == "Mathlib" || moduleName.startsWith "Mathlib."
+def isGlobalLibraryModule (moduleName : String) : Bool :=
+  moduleName == "Mathlib" || moduleName.startsWith "Mathlib." ||
+  moduleName == "Init" || moduleName.startsWith "Init." ||
+  moduleName == "Std" || moduleName.startsWith "Std." ||
+  moduleName == "Lean" || moduleName.startsWith "Lean."
 
-def ownedByMathlib (env : Environment) (name : Name) : Bool :=
+def ownedByGlobalLibrary (env : Environment) (name : Name) : Bool :=
   match Solve.Tools.AtomDump.moduleFor? env name with
-  | some moduleName => isMathlibModule moduleName
+  | some moduleName => isGlobalLibraryModule moduleName
   | none => false
 
 def emitNov (payload : Json) : CommandElabM Unit := do
@@ -103,28 +106,28 @@ def compareTypes? (targetType : Expr) (candidateType : Expr) (heartbeatBudget : 
   try
     withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := heartbeatBudget }) do
       Meta.withNewMCtxDepth do
-        let targetType ← instantiateMVars targetType
-        let candidateType ← instantiateMVars candidateType
+        /- Stored declaration types are closed expressions with no loose
+           metavariables. instantiateMVars on them forces thunks and triggers
+           whnf reduction, which is expensive in the full Mathlib environment
+           and can blow the heartbeat budget before producing a verdict.
+           We skip it when the type provably has no metavariables — this is
+           a provably safe no-op. If the type HAS metavars (shouldn't happen
+           for stored declarations, but could for partially elaborated terms),
+           we run instantiateMVars to resolve them. -/
+        let targetType ←
+          if targetType.hasMVar then instantiateMVars targetType else pure targetType
+        let candidateType ←
+          if candidateType.hasMVar then instantiateMVars candidateType else pure candidateType
         pure (some (← Meta.isDefEq targetType candidateType))
   catch _ =>
-    /- Exception means uncertain — could be heartbeat timeout, out-of-memory,
-       or an internal Lean error. Return none so the caller can fail-closed
-       to `unknown` rather than treating it as \"not defeq\" (which would
-       risk a false `novel_in_imported_env` verdict). -/
     pure none
-
-def compareTypes (targetType : Expr) (candidateType : Expr) (heartbeatBudget : Nat) :
-    Lean.Elab.Term.TermElabM Bool := do
-  match ← compareTypes? targetType candidateType heartbeatBudget with
-  | some b => pure b
-  | none => pure false
 
 def eligibleByScope (env : Environment) (prefixes : Array String) (globalScope : Bool) (info : ConstantInfo) :
     Bool :=
   allowedKind info &&
   !Solve.Tools.AtomDump.shouldSkip info.name &&
   if globalScope then
-    ownedByMathlib env info.name
+    ownedByGlobalLibrary env info.name
   else
     Solve.Tools.AtomDump.matchesPrefix prefixes info.name
 
@@ -186,7 +189,7 @@ def emitTargetResult
     (indexSize : Nat)
     (mode : String) : CommandElabM Unit := do
   try
-    let targetType ← liftTermElabM <| instantiateMVars targetInfo.type
+    let targetType := targetInfo.type
     let (witness, compared, capHit, bucketSize, uncertain) ←
       liftTermElabM <| findWitnessInCandidates target targetType candidateNames env candidateCap heartbeatBudget
     match witness with
@@ -221,7 +224,7 @@ def emitBruteTargetResult
     let mut compared := 0
     let mut witness : Option Name := none
     let mut uncertain := false
-    let targetType ← liftTermElabM <| instantiateMVars targetInfo.type
+    let targetType := targetInfo.type
     for info in capped do
       if witness.isNone && info.name != target then
         compared := compared + 1
@@ -280,7 +283,7 @@ def runDiscrTreeBatch
     | none => emitNov (payload target "unknown" none 0 false "target not found" none (some eligible.size) (some mode))
     | some targetInfo =>
         try
-          let targetType ← liftTermElabM <| instantiateMVars targetInfo.type
+          let targetType := targetInfo.type
           let bucket ← liftTermElabM <| Lean.Meta.DiscrTree.getMatch tree targetType
           let bucket := bucket.qsort fun left right => left.cmp right == .lt
           emitTargetResult target targetInfo bucket env candidateCap heartbeatBudget eligible.size mode
@@ -368,7 +371,7 @@ def run : CommandElabM Unit := do
     let mut compared := 0
     let mut witness : Option Name := none
     let mut uncertain := false
-    let targetType ← liftTermElabM <| instantiateMVars targetInfo.type
+    let targetType := targetInfo.type
     for info in capped do
       if witness.isNone then
         compared := compared + 1

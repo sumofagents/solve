@@ -48,6 +48,33 @@ def test_brute_imported_finds_utf8_duplicate():
 
 
 @pytest.mark.lean
+def test_brute_global_finds_utf8_duplicate():
+    """Regression for Phase 6B hardening: global brute scope must include core
+    library modules (Init/Std/Lean) as well as Mathlib modules. The witness for
+    this duplicate may live in Init, not under a Mathlib.* module name."""
+    module_path = _write_utf8_duplicate_module()
+    try:
+        results = probe_novelty_batch(
+            ["Solve.Generated.RunControl.novelty_global_utf8_dup"],
+            repo=ROOT,
+            imports=["Solve.Generated.RunControl_novelty_global_utf8"],
+            prefixes=["List"],
+            scope="global",
+            verify_mode="brute",
+            candidate_cap=600_000,
+            timeout=900,
+            heartbeat_budget=2_000_000,
+        )
+    finally:
+        module_path.unlink(missing_ok=True)
+
+    result = results["Solve.Generated.RunControl.novelty_global_utf8_dup"]
+    assert result.classification == "existing_defeq_duplicate"
+    assert result.witness is not None
+    assert not result.cap_hit
+
+
+@pytest.mark.lean
 @pytest.mark.xfail(
     reason="DiscrTree pre-filter can miss defeq matches that require Eq.symm "
            "(symmetric equalities are not grouped by DiscrTree.mkPath under "

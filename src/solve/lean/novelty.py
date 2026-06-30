@@ -196,7 +196,7 @@ def probe_novelty_batch(
     promoted_prefixes: list[str] | None = None,
     candidate_cap: int,
     timeout: int,
-    heartbeat_budget: int = 20_000,
+    heartbeat_budget: int = 2_000_000,
     rec_depth: int = 1_000,
     runner: LeanCommandRunner = _run_lake_env_lean,
 ) -> dict[str, NoveltyProbeResult]:
@@ -290,7 +290,7 @@ def probe_novelty(
     verify_mode: NoveltyVerifyMode = "brute",
     candidate_cap: int,
     timeout: int,
-    heartbeat_budget: int = 20_000,
+    heartbeat_budget: int = 2_000_000,
     rec_depth: int = 1_000,
     runner: LeanCommandRunner = _run_lake_env_lean,
 ) -> NoveltyProbeResult:

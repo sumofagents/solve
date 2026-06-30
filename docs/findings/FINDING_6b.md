@@ -1,116 +1,103 @@
-# Phase 6B Finding: Global Novelty Indexing — Honest Status
+# Phase 6B Finding: Global Novelty Indexing — Fixed Instrument
 
-## Date: 2026-06-29
+## Date: 2026-06-29 / hardened 2026-06-30
 ## Corpus: Mathlib.Data.List.Basic (Lean 4.31.0)
-## Scope: imported (List prefix) vs global (all mathlib modules)
+## Scope: imported List prefix vs global library modules (`Init`, `Std`, `Lean`, `Mathlib`)
 
-## A/B Result
+## A/B Result after hardening
 
-| Metric                          | 6A (imported scope) | 6B global (DiscrTree) |
-|---------------------------------|---------------------|----------------------|
-| Candidates classified           | 6                   | 6                    |
-| existing_defeq_duplicate        | 1                   | 0                    |
-| novel_in_imported_env           | 5                   | 0                    |
-| unknown                         | 0                   | **6 (all)**          |
-| promotable                      | 0                   | 0                    |
+| Metric                          | 6A imported scope | 6B global brute scope |
+|---------------------------------|-------------------|-----------------------|
+| Candidates classified           | 6                 | 6                     |
+| existing_defeq_duplicate        | 1                 | 1                     |
+| novel_in_imported_env           | 5                 | 5                     |
+| unknown                         | 0                 | 0                     |
+| promotable                      | 0                 | 0                     |
 
-## What happened
+The global novelty instrument now runs to completion. It does **not** change the
+promotable count on `List.Basic`: all retained candidates still fail the value
+bar because the surviving And.intro candidates are structural packaging, and the
+Eq.symm candidate is an existing duplicate.
 
-The global DiscrTree novelty path imported all of Mathlib and built an index
-of 345,912 mathlib declarations (module-based scoping works correctly — verified
-that `ownedByMathlib` correctly identifies mathlib constants by module ownership,
-not name prefix). The DiscrTree index built successfully.
+## What was fixed
 
-However, the per-target query phase failed: `instantiateMVars` on candidate types
-in the context of the full Mathlib environment hits a deterministic `whnf` timeout.
-All 6 candidates returned `unknown` (fail-closed). This is the correct fail-closed
-behavior — the probe does not claim novelty it cannot verify.
+The first 6B implementation was safely fail-closed but operationally unusable:
+global novelty returned `unknown` for all 6 candidates. The causes were real and
+separate:
 
-## Root cause of the timeout
+1. **Per-comparison timeout:** `compareTypes?` called `instantiateMVars` on stored
+   declaration types. Stored theorem declarations are closed Exprs; forcing
+   `instantiateMVars` on them in the full library environment triggered expensive
+   `whnf` work and exhausted the heartbeat budget. Fix: skip `instantiateMVars`
+   only when `Expr.hasMVar = false`; if metavariables are present, run
+   `instantiateMVars` and fail-closed on exception.
 
-When the full Mathlib environment (780k constants, 345k eligible) is loaded,
-`whnf`/`instantiateMVars` on even simple propositional types like
-`ByteArray.empty = [].utf8Encode` exhausts the per-call heartbeat budget. The
-heartbeat budget set via `compareTypes`'s `withTheReader` is allocated by
-`liftTermElabM` from the `maxHeartbeats` option, but the internal `whnf`
-reduction on mathlib-scale types is expensive due to type-class instance
-resolution and universe polymorphism.
+2. **Heartbeat too low for global brute:** the CLI/value defaults passed
+   `20_000` heartbeats, which Lean reports as ~20 per comparison in the relevant
+   error path. Fix: global-safe novelty default is now `2_000_000`.
 
-A standalone test confirmed that `instantiateMVars` works fine in a simple
-module (`set_option maxHeartbeats 1000000000; #test_inst` → OK). The issue is
-specific to the `NoveltyProbe` elaboration context where the heartbeat counter
-is allocated with a lower per-call budget.
+3. **Global timeout too low:** 300s could kill the full 6-target brute run.
+   Fix: global novelty timeout default is now 900s.
 
-## What works
+4. **Candidate cap too low for global brute:** 5,000 was below the global library
+   eligible set, so every target cap-hit and returned `unknown`. Fix: default
+   novelty candidate cap is now 500,000.
 
-1. **Module-based scoping works**: `ownedByMathlib` correctly identifies mathlib
-   declarations by module ownership (`env.getModuleIdxFor?` + module path starts
-   with "Mathlib"), not name prefix. This is the critical fix from the planning
-   phase — mathlib constants named `List.*`, `Nat.*` are correctly included.
+5. **Scope too narrow:** the original "global" scan only included declarations
+   owned by `Mathlib.*` modules. The duplicate witness for the Eq.symm candidate
+   can live in core modules such as `Init.Data.ByteArray.Lemmas`. Fix: global
+   scope now includes modules owned by `Init`, `Std`, `Lean`, and `Mathlib`, while
+   still excluding generated `Solve.*` modules.
 
-2. **Brute-force oracle works for imported scope**: the brute-force path
-   (`verify_mode=brute`, `scope=imported`, `prefixes=List`) correctly finds
-   the `existing_defeq_duplicate` for the Eq.symm candidate. This is verified
-   by the passing oracle test.
+## Evidence
 
-3. **Batch infrastructure works**: `probe_novelty_batch` correctly batches
-   all targets into one Lean process, parses N NOV lines, and handles
-   fail-closed partial output. The single-target `probe_novelty` wrapper
-   preserves back-compat.
+Known duplicate oracle:
 
-4. **DiscrTree index builds**: the index of 345k declarations builds in
-   ~30s without errors. Only the query phase (type instantiation + comparison)
-   fails on mathlib-scale types.
+- Target: `Solve.Generated.RunControl.novelty_global_utf8_dup`
+- Type: `ByteArray.empty = [].utf8Encode`
+- Global brute result: `existing_defeq_duplicate`
+- Witness observed: `ByteArray.emptyWithCapacity_eq_empty`
+- Compared: 52,187 candidates before first witness
+- cap_hit: false
+
+Run1 List.Basic global A/B:
+
+- Classified: 6 retained receipts
+- Novelty: 1 existing duplicate, 5 novel, 0 unknown
+- Promotable: 0/6
+
+## What this proves
+
+1. Global novelty is now a working instrument, not just a fail-closed shell.
+2. Global scope must include Lean core library modules (`Init`, `Std`, `Lean`) in
+   addition to `Mathlib`; module-name prefix `Mathlib.*` alone is not global.
+3. Brute mode is the sound default. DiscrTree remains an opt-in performance path.
+4. The timeout fix improves measurement only; it does not create a positive case.
+   The List.Basic value bottleneck remains corpus/grammar quality, not novelty.
 
 ## DiscrTree soundness limitation (documented, xfail test)
 
-Even when the DiscrTree query runs successfully, it can miss defeq matches
-that require `Eq.symm` (symmetric equalities are not grouped by
-`DiscrTree.mkPath` under reducible transparency). A candidate whose type is
-`b = a` (from Eq.symm) will not match an imported theorem `a = b`. This is
-documented as an xfail test (`test_discrtree_imported_finds_utf8_duplicate`).
-
-## What this means
-
-The global novelty infrastructure is built and the module-scoping is correct,
-but the DiscrTree query path needs heartbeat/performance tuning before it can
-produce reliable global novelty classifications. The fail-closed behavior
-(returning `unknown` rather than false `novel`) is correct and safe — no
-incorrect novelty claims are made.
-
-Promotable remains 0 under both imported and global scope (the global path
-returns unknown for all, which is more conservative than imported but still
-0 promotable).
-
-## Honest interpretation
-
-This is a legitimate partial-result finding. The infrastructure is sound:
-- Batch novelty probe works (verified by tests + A/B on imported scope)
-- Module-based mathlib scoping works (verified: 345k eligible declarations)
-- Fail-closed semantics work (unknown on timeout, never false-novel)
-- The DiscrTree pre-filter has two known issues: (1) heartbeat timeout on
-  mathlib-scale type instantiation, (2) symmetric-equality misses
-
-Both issues are performance/soundness-hardening problems, not architecture
-problems. They are correctly deferred to a future phase (6C+ or a dedicated
-hardening pass).
+DiscrTree narrowing can miss defeq matches that require `Eq.symm`; symmetric
+equalities are not grouped by `DiscrTree.mkPath` under reducible transparency.
+This is documented as an xfail test (`test_discrtree_imported_finds_utf8_duplicate`).
+Until the query includes symmetric variants or another completeness argument,
+`discrtree` is opt-in only; `brute` is the sound default.
 
 ## Dual-lane process
 
-- **Planning:** Both Codex GPT-5.5 (xhigh) and Claude opus independently designed
-  the DiscrTree + module-scoping approach. Codex contributed the critical
-  module-based scoping correction; Claude proposed the DiscrTree data structure.
-- **Build:** Codex lane produced the canonical build (Lean compiles clean, 127
-  non-lean tests pass). Claude lane had a Lean compile error (exc.toString
-  invalid field) — Codex adopted as canonical base.
-- **Review:** Dual-lane (Codex REQUEST_CHANGES + Claude APPROVE). Codex found
-  4 issues; Claude independently confirmed the compareTypes fail-closed gap as
-  non-blocking. Controller applied ALL 4 fixes:
-  1. compareTypes now returns Option Bool (tri-state); uncertain comparisons
-     propagate as "unknown" (fail-closed), never false-novel.
-  2. DiscrTree insertion failures tracked; uncertain flag set on any failure.
-  3. Default verify_mode changed from "discrtree" to "brute" (sound by default;
-     discrtree is opt-in for performance with known symmetric-eq limitation).
-  4. build_modules() wrapped in try/except — build failures return per-target
-     unknown instead of raising.
-- Full suite after fixes: 150 passed, 1 skipped, 1 xfailed, 0 failed.
+- **Planning:** Codex GPT-5.5 and Claude opus independently designed global
+  novelty indexing. Claude proposed DiscrTree; Codex caught the module-scoping
+  issue (names like `List.*` are not `Mathlib.*`).
+- **Build:** Codex build adopted as canonical because its Lean code compiled;
+  Claude build had a Lean compile error.
+- **Review:** Codex REQUEST_CHANGES, Claude APPROVE-with-nits. Codex found real
+  fail-closed issues; controller fixed them: tri-state comparisons, brute
+  default, build failure handling, higher heartbeat/timeout/cap, conditional
+  mvar instantiation, and broader global library module scope.
+
+## Honest interpretation
+
+Phase 6B now answers the intended question on this corpus: comparing against the
+broader library does not surface new value. It confirms the same basic result as
+6A with stronger novelty evidence: 5 candidates are globally novel but structural;
+1 candidate is globally duplicate; 0 are promotable.

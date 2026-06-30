@@ -135,8 +135,8 @@ class PromotionSpec(StrictModel):
 
 class NoveltyConfig(StrictModel):
     scope: Literal["imported", "global"] = "imported"
-    verify_mode: Literal["discrtree", "brute"] = "discrtree"
-    candidate_cap: int = Field(default=5_000, ge=0)
+    verify_mode: Literal["discrtree", "brute"] = "brute"
+    candidate_cap: int = Field(default=500_000, ge=0)
 
 
 class ConsumerSpec(StrictModel):
