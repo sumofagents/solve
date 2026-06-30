@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pytest
 
@@ -56,7 +56,7 @@ def synthetic_module():
 # ----------------------------------------------------------- pure verdict logic
 
 def _make_probe_map(
-    sizes: Dict[str, Tuple[str, int, bool]],
+    sizes: Dict[str, Tuple[str, Optional[int], bool]],
 ):
     """Return a fake probe_fn keyed on target name.
 
@@ -198,6 +198,24 @@ def test_verdict_unknown_when_with_probe_unknown(tmp_path):
     })
     rows = measure_shortening([bench], repo=tmp_path, probe_fn=probe)
     assert rows[0].verdict == "unknown"
+
+
+def test_verdict_unknown_when_ok_payload_missing_term_size(tmp_path):
+    bench = BenchmarkRow(
+        benchmark_id="b6b",
+        imports=(),
+        without_target="Foo.without",
+        with_target="Foo.with",
+        promoted_const="Foo.helper",
+    )
+    probe = _make_probe_map({
+        "Foo.without": ("ok", 5, False),
+        "Foo.with": ("ok", None, True),
+    })
+    rows = measure_shortening([bench], repo=tmp_path, probe_fn=probe)
+    assert rows[0].verdict == "unknown"
+    assert rows[0].delta_absolute is None
+    assert "with:ok payload missing term_size" in rows[0].reason
 
 
 def test_summarize_counts(tmp_path):

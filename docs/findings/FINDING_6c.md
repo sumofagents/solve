@@ -27,10 +27,10 @@
   1. Look up the target in the environment.
   2. Extract the value: `thmInfo.value`, `defnInfo.value`, or
      `opaqueInfo.value`. Other constant kinds emit `verdict="unknown"`.
-  3. Recursively count `Expr` nodes after stripping outer `.mdata` metadata.
+  3. Recursively count `Expr` nodes after stripping `.mdata` metadata wrappers.
      Counts apps, lambdas, foralls, lets, projections, constants, fvars, mvars,
-     sorts, lits, bvars (each constructor contributes 1; metadata wrappers
-     contribute 1 themselves on recursion into them).
+     sorts, lits, and bvars. Metadata wrappers are not counted; the metric is
+     over the metadata-stripped proof/value expression.
   4. If `requiredConst` is non-empty, recurse over the value and check whether
      that name appears as a `.const` anywhere.
 - Output: exactly one `PROOFSIZE {...}` JSON line plus `PROOFSIZE_DONE`.

@@ -17,7 +17,7 @@ Verdict rules:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Iterable, List, Literal, Optional
 
@@ -112,13 +112,17 @@ def _compute_row(
         )
 
     # Verdict resolution
-    if without_result.verdict != "ok" or with_result.verdict != "ok":
+    if without_result.verdict != "ok" or with_result.verdict != "ok" or without_result.term_size is None or with_result.term_size is None:
         verdict = "unknown"
         reasons = []
         if without_result.verdict != "ok":
             reasons.append(f"without:{without_result.reason or 'unknown'}")
         if with_result.verdict != "ok":
             reasons.append(f"with:{with_result.reason or 'unknown'}")
+        if without_result.verdict == "ok" and without_result.term_size is None:
+            reasons.append("without:ok payload missing term_size")
+        if with_result.verdict == "ok" and with_result.term_size is None:
+            reasons.append("with:ok payload missing term_size")
         reason = "; ".join(reasons) or "probe unknown"
         return ShorteningRow(
             benchmark_id=bench.benchmark_id,

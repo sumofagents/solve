@@ -85,6 +85,8 @@ def parse_proof_size_output(stdout: str) -> ProofSizeResult:
     # `True`/`False` are ints in Python — reject explicitly.
     if isinstance(term_size, bool):
         raise RuntimeError("PROOFSIZE payload term_size must be int or null")
+    if verdict == "ok" and term_size is None:
+        raise RuntimeError("PROOFSIZE ok payload must include integer term_size")
 
     required_const = payload.get("required_const")
     if required_const is not None and not isinstance(required_const, str):

@@ -120,6 +120,16 @@ def test_parser_rejects_invalid_verdict():
         parse_proof_size_output(bad)
 
 
+def test_parser_rejects_ok_payload_without_term_size():
+    bad = (
+        f'{PROOFSIZE_PREFIX}{{"target":"Foo.bar","verdict":"ok","term_size":null,'
+        '"required_const":null,"used_required_const":null,"reason":""}\n'
+        f"{PROOFSIZE_DONE}\n"
+    )
+    with pytest.raises(RuntimeError, match="term_size"):
+        parse_proof_size_output(bad)
+
+
 def test_parser_rejects_malformed_json():
     bad = f"{PROOFSIZE_PREFIX}{{not json}}\n{PROOFSIZE_DONE}\n"
     with pytest.raises(ValueError):
