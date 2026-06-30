@@ -24,8 +24,8 @@ register_option solve.novelty.prefixes : String := {
 }
 
 register_option solve.novelty.verifyMode : String := {
-  defValue := "discrtree"
-  descr := "Novelty verification mode: discrtree or brute."
+  defValue := "brute"
+  descr := "Novelty verification mode: brute (exhaustive, sound) or discrtree (fast pre-filter, may miss symmetric defeq)."
 }
 
 register_option solve.novelty.globalScope : Bool := {
@@ -95,20 +95,29 @@ def payload
     ("mode", toJson mode)
   ]
 
-def compareTypes (targetType : Expr) (candidateType : Expr) (heartbeatBudget : Nat) :
-    Lean.Elab.Term.TermElabM Bool := do
+/- Tri-state comparison result: `some true` = defeq, `some false` = definitely
+   not defeq, `none` = uncertain (exception / heartbeat timeout). The caller
+   must propagate `none` as `unknown` to preserve fail-closed semantics. -/
+def compareTypes? (targetType : Expr) (candidateType : Expr) (heartbeatBudget : Nat) :
+    Lean.Elab.Term.TermElabM (Option Bool) := do
   try
     withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := heartbeatBudget }) do
       Meta.withNewMCtxDepth do
         let targetType ← instantiateMVars targetType
         let candidateType ← instantiateMVars candidateType
-        Meta.isDefEq targetType candidateType
+        pure (some (← Meta.isDefEq targetType candidateType))
   catch _ =>
-    /- Individual isDefEq throws almost always mean "structurally incompatible,
-       not defeq" — genuine duplicates resolve trivially. Treat throws as
-       not-equal. Global budget exhaustion or process-level errors are caught
-       by the outer try/catch in `run` and reported as "unknown". -/
-    pure false
+    /- Exception means uncertain — could be heartbeat timeout, out-of-memory,
+       or an internal Lean error. Return none so the caller can fail-closed
+       to `unknown` rather than treating it as \"not defeq\" (which would
+       risk a false `novel_in_imported_env` verdict). -/
+    pure none
+
+def compareTypes (targetType : Expr) (candidateType : Expr) (heartbeatBudget : Nat) :
+    Lean.Elab.Term.TermElabM Bool := do
+  match ← compareTypes? targetType candidateType heartbeatBudget with
+  | some b => pure b
+  | none => pure false
 
 def eligibleByScope (env : Environment) (prefixes : Array String) (globalScope : Bool) (info : ConstantInfo) :
     Bool :=
@@ -144,23 +153,28 @@ def findWitnessInCandidates
     (env : Environment)
     (candidateCap : Nat)
     (heartbeatBudget : Nat) :
-    Lean.Elab.Term.TermElabM (Option Name × Nat × Bool × Nat) := do
+    Lean.Elab.Term.TermElabM (Option Name × Nat × Bool × Nat × Bool) := do
+  /- Returns (witness, compared, capHit, bucketSize, uncertain).
+     `uncertain = true` means at least one comparison was inconclusive
+     (exception/timeout); the caller must emit `unknown` in that case. -/
   let bucketSize := candidateNames.size
   if bucketSize > candidateCap then
-    pure (none, 0, true, bucketSize)
+    pure (none, 0, true, bucketSize, false)
   else
     let mut compared := 0
     let mut witness : Option Name := none
+    let mut uncertain := false
     for name in candidateNames do
       if witness.isNone && name != target then
         match env.find? name with
         | none => pure ()
         | some info =>
             compared := compared + 1
-            let same ← compareTypes targetType info.type heartbeatBudget
-            if same then
-              witness := some info.name
-    pure (witness, compared, false, bucketSize)
+            match ← compareTypes? targetType info.type heartbeatBudget with
+            | some true => witness := some info.name
+            | some false => pure ()
+            | none => uncertain := true
+    pure (witness, compared, false, bucketSize, uncertain)
 
 def emitTargetResult
     (target : Name)
@@ -173,17 +187,20 @@ def emitTargetResult
     (mode : String) : CommandElabM Unit := do
   try
     let targetType ← liftTermElabM <| instantiateMVars targetInfo.type
-    let (witness, compared, capHit, bucketSize) ←
+    let (witness, compared, capHit, bucketSize, uncertain) ←
       liftTermElabM <| findWitnessInCandidates target targetType candidateNames env candidateCap heartbeatBudget
     match witness with
     | some found =>
         emitNov (payload target "existing_defeq_duplicate" (some found) compared false
           "defeq match in imported environment" (some bucketSize) (some indexSize) (some mode))
     | none =>
-        if capHit then
+      if uncertain then
+        emitNov (payload target "unknown" none compared false "inconclusive comparison (exception or heartbeat timeout)"
+          (some bucketSize) (some indexSize) (some mode))
+      else if capHit then
           emitNov (payload target "unknown" none compared true "cap hit; not all candidates checked"
             (some bucketSize) (some indexSize) (some mode))
-        else
+      else
           emitNov (payload target "novel_in_imported_env" none compared false "no imported defeq duplicate found"
             (some bucketSize) (some indexSize) (some mode))
   catch exc =>
@@ -203,20 +220,25 @@ def emitBruteTargetResult
     let capped := eligible.extract 0 limit
     let mut compared := 0
     let mut witness : Option Name := none
+    let mut uncertain := false
     let targetType ← liftTermElabM <| instantiateMVars targetInfo.type
     for info in capped do
       if witness.isNone && info.name != target then
         compared := compared + 1
-        let same ← liftTermElabM <| compareTypes targetType info.type heartbeatBudget
-        if same then
-          witness := some info.name
+        match ← liftTermElabM <| compareTypes? targetType info.type heartbeatBudget with
+        | some true => witness := some info.name
+        | some false => pure ()
+        | none => uncertain := true
     match witness with
     | some found =>
         emitNov (payload target "existing_defeq_duplicate" (some found) compared false
           "defeq match in imported environment" (some eligible.size) (some eligible.size) (some mode))
     | none =>
         let capHit := eligible.size > candidateCap
-        if capHit then
+        if uncertain then
+          emitNov (payload target "unknown" none compared false "inconclusive comparison (exception or heartbeat timeout)"
+            (some eligible.size) (some eligible.size) (some mode))
+        else if capHit then
           emitNov (payload target "unknown" none compared true "cap hit; not all candidates checked"
             (some eligible.size) (some eligible.size) (some mode))
         else
@@ -345,21 +367,25 @@ def run : CommandElabM Unit := do
     let capped := eligible.extract 0 limit
     let mut compared := 0
     let mut witness : Option Name := none
+    let mut uncertain := false
     let targetType ← liftTermElabM <| instantiateMVars targetInfo.type
     for info in capped do
       if witness.isNone then
         compared := compared + 1
-        let same ← liftTermElabM <| compareTypes targetType info.type heartbeatBudget
-        if same then
-          witness := some info.name
+        match ← liftTermElabM <| compareTypes? targetType info.type heartbeatBudget with
+        | some true => witness := some info.name
+        | some false => pure ()
+        | none => uncertain := true
     match witness with
     | some found =>
         emitNov (payload target "existing_defeq_duplicate" (some found) compared false "defeq match in imported environment")
     | none =>
         let capHit := eligible.size > candidateCap
         /- Fail-closed: if the cap was hit we did not check all candidates, so
-           we cannot confirm novelty. Report "unknown" instead of "novel". -/
-        if capHit then
+           we cannot confirm novelty. Report \"unknown\" instead of \"novel\". -/
+        if uncertain then
+          emitNov (payload target "unknown" none compared false "inconclusive comparison (exception or heartbeat timeout)")
+        else if capHit then
           emitNov (payload target "unknown" none compared true "cap hit; not all candidates checked")
         else
           emitNov (payload target "novel_in_imported_env" none compared false "no imported defeq duplicate found")

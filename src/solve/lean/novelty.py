@@ -192,7 +192,7 @@ def probe_novelty_batch(
     imports: list[str],
     prefixes: list[str],
     scope: NoveltyScope = "imported",
-    verify_mode: NoveltyVerifyMode = "discrtree",
+    verify_mode: NoveltyVerifyMode = "brute",
     promoted_prefixes: list[str] | None = None,
     candidate_cap: int,
     timeout: int,
@@ -222,27 +222,32 @@ def probe_novelty_batch(
     wrapper_imports = list(imports)
     if scope == "global" and "Mathlib" not in wrapper_imports:
         wrapper_imports.append("Mathlib")
-    build_modules(repo, [*wrapper_imports, "Solve.Tools.NoveltyProbe"], timeout=timeout)
     generated_dir = repo / "lean" / "Solve" / "Generated"
     generated_dir.mkdir(parents=True, exist_ok=True)
     stem = _batch_file_stem(unique_targets, imports, scope, verify_mode)
     targets_path = generated_dir / f"NoveltyTargets_{stem}.jsonl"
     module_path = generated_dir / f"NoveltyProbe_{stem}.lean"
-    targets_path.write_text(
-        "".join(json.dumps({"name": target}, sort_keys=True) + "\n" for target in unique_targets),
-        encoding="utf-8",
-    )
-    module_path.write_text(
-        _wrapper_text(
-            imports=imports,
-            scope=scope,
-            heartbeat_budget=heartbeat_budget,
-            rec_depth=rec_depth,
-            candidate_cap=candidate_cap,
-            target_count=len(unique_targets),
-        ),
-        encoding="utf-8",
-    )
+    try:
+        build_modules(repo, [*wrapper_imports, "Solve.Tools.NoveltyProbe"], timeout=timeout)
+        targets_path.write_text(
+            "".join(json.dumps({"name": target}, sort_keys=True) + "\n" for target in unique_targets),
+            encoding="utf-8",
+        )
+        module_path.write_text(
+            _wrapper_text(
+                imports=imports,
+                scope=scope,
+                heartbeat_budget=heartbeat_budget,
+                rec_depth=rec_depth,
+                candidate_cap=candidate_cap,
+                target_count=len(unique_targets),
+            ),
+            encoding="utf-8",
+        )
+    except subprocess.TimeoutExpired:
+        return {target: _probe_error(f"build timeout after {timeout}s") for target in unique_targets}
+    except Exception as exc:
+        return {target: _probe_error(f"build failure: {exc}") for target in unique_targets}
     cmd = [
         find_tool("lake"),
         "env",
@@ -282,7 +287,7 @@ def probe_novelty(
     prefixes: list[str],
     promoted_prefixes: list[str] | None = None,
     scope: NoveltyScope = "imported",
-    verify_mode: NoveltyVerifyMode = "discrtree",
+    verify_mode: NoveltyVerifyMode = "brute",
     candidate_cap: int,
     timeout: int,
     heartbeat_budget: int = 20_000,

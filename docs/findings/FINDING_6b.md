@@ -103,8 +103,14 @@ hardening pass).
 - **Build:** Codex lane produced the canonical build (Lean compiles clean, 127
   non-lean tests pass). Claude lane had a Lean compile error (exc.toString
   invalid field) — Codex adopted as canonical base.
-- **Controller fixes:** (1) Fixed Lean heartbeat allocation for target type
-  instantiation. (2) Fixed oracle test to use theorem (explicit type) instead
-  of def (inferred type). (3) Redesigned oracle to use imported scope (brute
-  path works; global path times out). (4) Documented DiscrTree symmetric-eq
-  limitation as xfail. (5) Ran real A/B measurement.
+- **Review:** Dual-lane (Codex REQUEST_CHANGES + Claude APPROVE). Codex found
+  4 issues; Claude independently confirmed the compareTypes fail-closed gap as
+  non-blocking. Controller applied ALL 4 fixes:
+  1. compareTypes now returns Option Bool (tri-state); uncertain comparisons
+     propagate as "unknown" (fail-closed), never false-novel.
+  2. DiscrTree insertion failures tracked; uncertain flag set on any failure.
+  3. Default verify_mode changed from "discrtree" to "brute" (sound by default;
+     discrtree is opt-in for performance with known symmetric-eq limitation).
+  4. build_modules() wrapped in try/except — build failures return per-target
+     unknown instead of raising.
+- Full suite after fixes: 150 passed, 1 skipped, 1 xfailed, 0 failed.
