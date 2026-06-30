@@ -297,6 +297,46 @@ def command_classify_value(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_measure_shortening(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    benchmarks_path = _resolve_output_path(args.benchmarks, repo)
+    out_path = _resolve_output_path(args.out, repo)
+    metrics_path = _resolve_output_path(args.metrics, repo)
+    # Spec is accepted for context/consistency with other commands but the
+    # benchmarks file itself carries the imports per row.
+    spec_path = args.spec
+    try:
+        from solve.measure_shortening import (
+            load_benchmarks,
+            measure_shortening,
+            summarize,
+            write_metrics,
+            write_rows,
+        )
+
+        benchmarks = load_benchmarks(benchmarks_path)
+        rows = measure_shortening(
+            benchmarks,
+            repo=repo,
+            timeout=args.timeout,
+            heartbeat_budget=args.heartbeat_budget,
+            rec_depth=args.rec_depth,
+        )
+        write_rows(out_path, rows)
+        metrics = summarize(rows)
+        write_metrics(metrics_path, metrics)
+    except Exception as exc:
+        print(f"MEASURE_SHORTENING_FAIL {spec_path}", file=sys.stderr)
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(
+        f"MEASURE_SHORTENING_OK {spec_path} total={metrics.total} "
+        f"shortened={metrics.shortened_count} unknown={metrics.unknown_count} "
+        f"out={out_path}"
+    )
+    return 0
+
+
 def command_mark_downstream_used(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     epoch0_receipts = _resolve_output_path(args.epoch0_receipts, repo)
@@ -430,6 +470,20 @@ def build_parser() -> argparse.ArgumentParser:
     downstream_parser.add_argument("--max-constants", type=int, default=10_000)
     downstream_parser.add_argument("--max-receipts", type=int, default=None)
     downstream_parser.set_defaults(func=command_mark_downstream_used)
+
+    shortening_parser = sub.add_parser(
+        "measure-shortening",
+        help="measure proof-shortening evidence by comparing elaborated proof Expr sizes",
+    )
+    shortening_parser.add_argument("spec")
+    shortening_parser.add_argument("--benchmarks", required=True)
+    shortening_parser.add_argument("--out", required=True)
+    shortening_parser.add_argument("--metrics", required=True)
+    shortening_parser.add_argument("--repo", default=".")
+    shortening_parser.add_argument("--timeout", type=int, default=60)
+    shortening_parser.add_argument("--heartbeat-budget", type=int, default=20_000)
+    shortening_parser.add_argument("--rec-depth", type=int, default=1_000)
+    shortening_parser.set_defaults(func=command_measure_shortening)
 
     return parser
 
